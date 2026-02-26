@@ -49,7 +49,7 @@ function buildSlackPayload(issues, poolState) {
     `- AUBRAI Reserve: ${fmt(poolState.aubraiReserve)}`,
     `- BIO Reserve: ${fmt(poolState.bioReserve)}`,
     '',
-    `<${config.basescanPoolUrl}|BaseScan> | <${config.dexscreenerPoolUrl}|DexScreener>`,
+    `<${config.uniswapPoolUrl}|Uniswap> | <${config.basescanPoolUrl}|BaseScan> | <${config.dexscreenerPoolUrl}|DexScreener>`,
   ].join('\n');
 
   return { text };

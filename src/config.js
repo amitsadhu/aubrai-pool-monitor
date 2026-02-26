@@ -31,6 +31,7 @@ const config = {
   priceHistorySize: 10,           // rolling window of price readings
 
   // Links
+  uniswapPoolUrl: 'https://app.uniswap.org/explore/pools/base/0x49970c044424e71d7f528ea60cf6329b4cf40786',
   basescanPoolUrl: 'https://basescan.org/address/0x49970c044424e71d7f528ea60cf6329b4cf40786',
   dexscreenerPoolUrl: 'https://dexscreener.com/base/0x49970c044424e71d7f528ea60cf6329b4cf40786',
   dexscreenerApiUrl: 'https://api.dexscreener.com/latest/dex/pairs/base/0x49970c044424e71d7f528ea60cf6329b4cf40786',
