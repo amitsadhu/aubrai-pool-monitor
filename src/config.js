@@ -26,6 +26,8 @@ const config = {
   priceChangeThreshold: 20,       // % change between polls triggers alert
   minReserveThreshold: 100,       // minimum reserve (in token units) before alert
   dexscreenerDeviation: 30,       // % deviation from DexScreener triggers alert
+  priceImpactThreshold: 10,          // % slippage that triggers alert
+  priceImpactTestAmounts: [100, 1000, 10000], // BIO trade sizes to test
   alertCooldownMs: 5 * 60 * 1000, // 5 minutes between duplicate alerts
   pollIntervalMs: 30_000,         // 30 seconds
   priceHistorySize: 10,           // rolling window of price readings

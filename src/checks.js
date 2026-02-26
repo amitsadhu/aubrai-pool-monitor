@@ -61,6 +61,39 @@ function checkSpotPriceSanity(spotPrice) {
 }
 
 /**
+ * Calculate price impact for a BIO→AUBRAI swap using constant product formula.
+ * Price impact = how much the trade moves the pool price vs spot.
+ */
+function calculatePriceImpact(bioAmountIn, bioReserve, aubraiReserve) {
+  if (bioReserve === 0 || aubraiReserve === 0) return 100;
+  // Uniswap V2: amountOut = (amountIn * 997 * reserveOut) / (reserveIn * 1000 + amountIn * 997)
+  const amountInWithFee = bioAmountIn * 997;
+  const amountOut = (amountInWithFee * aubraiReserve) / (bioReserve * 1000 + amountInWithFee);
+  const executionPrice = bioAmountIn / amountOut; // BIO per AUBRAI
+  const spotPrice = bioReserve / aubraiReserve;   // BIO per AUBRAI
+  return ((executionPrice - spotPrice) / spotPrice) * 100;
+}
+
+/**
+ * Check price impact for configured trade sizes.
+ */
+function checkPriceImpact(bioReserve, aubraiReserve) {
+  const failures = [];
+  for (const amount of config.priceImpactTestAmounts) {
+    const impact = calculatePriceImpact(amount, bioReserve, aubraiReserve);
+    const rounded = Math.round(impact * 100) / 100;
+    if (impact > config.priceImpactThreshold) {
+      failures.push(`${amount.toLocaleString()} BIO swap → ${rounded}% price impact`);
+    }
+  }
+  return {
+    ok: failures.length === 0,
+    details: failures,
+    severity: failures.some((f) => parseFloat(f.match(/([\d.]+)%/)?.[1]) > 50) ? 'critical' : 'warning',
+  };
+}
+
+/**
  * Cross-reference pool price with DexScreener.
  */
 async function checkDexScreenerDeviation(spotPrice) {
@@ -107,7 +140,13 @@ async function checkAllHealth(currentState, previousState) {
     issues.push({ check: 'Reserve Levels', ...reserves });
   }
 
-  // 4. DexScreener cross-reference
+  // 4. Price impact check
+  const impact = checkPriceImpact(currentState.bioReserve, currentState.aubraiReserve);
+  if (!impact.ok) {
+    issues.push({ check: 'Price Impact', ...impact });
+  }
+
+  // 5. DexScreener cross-reference
   const dexCheck = await checkDexScreenerDeviation(currentState.spotPrice);
   if (!dexCheck.ok) {
     issues.push({ check: 'DexScreener Deviation', ...dexCheck });
@@ -122,4 +161,4 @@ async function checkAllHealth(currentState, previousState) {
   return issues;
 }
 
-module.exports = { checkPriceStability, checkReserves, checkSpotPriceSanity, checkDexScreenerDeviation, checkAllHealth };
+module.exports = { checkPriceStability, checkReserves, checkSpotPriceSanity, checkPriceImpact, calculatePriceImpact, checkDexScreenerDeviation, checkAllHealth };
