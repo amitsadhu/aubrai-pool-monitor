@@ -1,10 +1,10 @@
 const config = require('./config');
-const { init, getPoolState } = require('./pool');
-const { checkAllHealth } = require('./checks');
-const { sendSlackAlert } = require('./alerts');
+const { init, getPoolState, setLastKnownPrice, pollSwapEvents } = require('./pool');
+const { checkAllHealth, checkSwapSlippage } = require('./checks');
+const { sendTelegramAlert, sendSwapAlert } = require('./alerts');
 
-function fmt(n) {
-  return Number(n).toLocaleString('en-US', { maximumFractionDigits: 2 });
+function fmt(n, digits = 2) {
+  return Number(n).toLocaleString('en-US', { maximumFractionDigits: digits });
 }
 
 let previousState = null;
@@ -12,9 +12,21 @@ let pollTimer = null;
 
 async function poll() {
   try {
-    const state = await getPoolState();
+    // Check for new swaps since last poll
+    const swaps = await pollSwapEvents();
+    for (const swap of swaps) {
+      console.log(`[swap] ${swap.direction} | ${fmt(swap.aubraiAmount)} AUBRAI / ${fmt(swap.bioAmount)} BIO | slippage: ${swap.slippage}% | tx: ${swap.txHash}`);
+      const result = checkSwapSlippage(swap);
+      if (!result.ok) {
+        console.log(`[!] Swap slippage alert: ${swap.slippage}%`);
+        await sendSwapAlert(swap);
+      }
+    }
 
-    // Run health checks
+    // Fetch pool state and run health checks
+    const state = await getPoolState();
+    setLastKnownPrice(state.spotPrice);
+
     const issues = await checkAllHealth(state, previousState);
 
     if (issues.length > 0) {
@@ -22,10 +34,10 @@ async function poll() {
       for (const issue of issues) {
         console.log(`    - ${issue.check}: ${issue.detail || issue.details?.join(', ') || `${issue.deviation}% deviation`}`);
       }
-      await sendSlackAlert(issues, state);
+      await sendTelegramAlert(issues, state);
     } else {
       console.log(
-        `Pool OK | 1 AUBRAI = ${fmt(state.spotPrice)} BIO | Reserves: ${fmt(state.aubraiReserve)} AUBRAI / ${fmt(state.bioReserve)} BIO`
+        `Pool OK | 1 AUBRAI = ${fmt(state.spotPrice)} BIO (${fmt(state.aubraiPerBio, 4)} AUBRAI/BIO) | Reserves: ${fmt(state.aubraiReserve)} AUBRAI / ${fmt(state.bioReserve)} BIO | tick ${state.tick}`
       );
     }
 
@@ -36,19 +48,14 @@ async function poll() {
 }
 
 async function start() {
-  console.log('AUBRAI/BIO Pool Health Monitor');
+  console.log('AUBRAI/BIO Aerodrome SlipStream Pool Health Monitor');
   console.log(`Pool: ${config.poolAddress}`);
-  console.log(`Polling every ${config.pollIntervalMs / 1000}s`);
-  console.log(`Slack alerts: ${config.slackWebhookUrl ? 'enabled' : 'disabled (no webhook URL)'}`);
+  console.log(`Polling every ${config.pollIntervalMs / 1000}s | Swap slippage threshold: ${config.swapSlippageThreshold}%`);
+  console.log(`Telegram alerts: ${config.telegramBotToken && config.telegramChatId ? 'enabled' : 'disabled (missing bot token or chat ID)'}`);
   console.log('---');
 
-  // Initialize provider and detect token ordering
   await init();
-
-  // First poll immediately
   await poll();
-
-  // Then poll on interval
   pollTimer = setInterval(poll, config.pollIntervalMs);
 }
 

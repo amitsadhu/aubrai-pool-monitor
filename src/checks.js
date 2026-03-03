@@ -22,12 +22,12 @@ function checkPriceStability(currentPrice, previousPrice, threshold = config.pri
 /**
  * Check that both reserves are above minimum thresholds.
  */
-function checkReserves(aubraiReserve, bioReserve, minThreshold = config.minReserveThreshold) {
+function checkReserves(aubraiReserve, bioReserve) {
   const issues = [];
-  if (aubraiReserve < minThreshold) {
+  if (aubraiReserve < config.minReserveAubrai) {
     issues.push(`AUBRAI reserve dangerously low: ${aubraiReserve.toFixed(2)}`);
   }
-  if (bioReserve < minThreshold) {
+  if (bioReserve < config.minReserveBio) {
     issues.push(`BIO reserve dangerously low: ${bioReserve.toFixed(2)}`);
   }
   return {
@@ -38,19 +38,18 @@ function checkReserves(aubraiReserve, bioReserve, minThreshold = config.minReser
 }
 
 /**
- * Check if spot price is in a sane range.
- * Expected: ~60 BIO per AUBRAI. Flag anything wildly off.
+ * Check if spot price (BIO per AUBRAI) is in a sane range.
+ * Expected: ~50-70 BIO per AUBRAI.
  */
 function checkSpotPriceSanity(spotPrice) {
-  // If price is effectively zero or absurdly high, something is wrong
-  if (spotPrice < 0.001) {
+  if (spotPrice < config.minSanePrice) {
     return {
       ok: false,
       detail: `Spot price near zero: ${spotPrice}`,
       severity: 'critical',
     };
   }
-  if (spotPrice > 1_000_000) {
+  if (spotPrice > config.maxSanePrice) {
     return {
       ok: false,
       detail: `Spot price absurdly high: ${spotPrice}`,
@@ -61,36 +60,35 @@ function checkSpotPriceSanity(spotPrice) {
 }
 
 /**
- * Calculate price impact for a BIO→AUBRAI swap using constant product formula.
- * Price impact = how much the trade moves the pool price vs spot.
+ * Check if raw pool liquidity is above minimum threshold.
  */
-function calculatePriceImpact(bioAmountIn, bioReserve, aubraiReserve) {
-  if (bioReserve === 0 || aubraiReserve === 0) return 100;
-  // Uniswap V2: amountOut = (amountIn * 997 * reserveOut) / (reserveIn * 1000 + amountIn * 997)
-  const amountInWithFee = bioAmountIn * 997;
-  const amountOut = (amountInWithFee * aubraiReserve) / (bioReserve * 1000 + amountInWithFee);
-  const executionPrice = bioAmountIn / amountOut; // BIO per AUBRAI
-  const spotPrice = bioReserve / aubraiReserve;   // BIO per AUBRAI
-  return ((executionPrice - spotPrice) / spotPrice) * 100;
+function checkLiquidity(liquidity) {
+  if (liquidity < config.minLiquidity) {
+    return {
+      ok: false,
+      detail: `Pool liquidity very low: ${liquidity.toString()}`,
+      severity: 'critical',
+    };
+  }
+  return { ok: true };
 }
 
 /**
- * Check price impact for configured trade sizes.
+ * Check if a real swap's slippage exceeds the threshold.
  */
-function checkPriceImpact(bioReserve, aubraiReserve) {
-  const failures = [];
-  for (const amount of config.priceImpactTestAmounts) {
-    const impact = calculatePriceImpact(amount, bioReserve, aubraiReserve);
-    const rounded = Math.round(impact * 100) / 100;
-    if (impact > config.priceImpactThreshold) {
-      failures.push(`${amount.toLocaleString()} BIO swap → ${rounded}% price impact`);
-    }
+function checkSwapSlippage(swapData) {
+  if (swapData.slippage > config.swapSlippageThreshold) {
+    return {
+      ok: false,
+      detail: `${swapData.direction}: ${swapData.slippage}% slippage (${fmt(swapData.aubraiAmount)} AUBRAI / ${fmt(swapData.bioAmount)} BIO)`,
+      severity: swapData.slippage > config.swapSlippageThreshold * 2 ? 'critical' : 'warning',
+    };
   }
-  return {
-    ok: failures.length === 0,
-    details: failures,
-    severity: failures.some((f) => parseFloat(f.match(/([\d.]+)%/)?.[1]) > 50) ? 'critical' : 'warning',
-  };
+  return { ok: true };
+}
+
+function fmt(n) {
+  return Number(n).toLocaleString('en-US', { maximumFractionDigits: 2 });
 }
 
 /**
@@ -99,7 +97,6 @@ function checkPriceImpact(bioReserve, aubraiReserve) {
 async function checkDexScreenerDeviation(spotPrice) {
   const dexPrice = await getDexScreenerPrice();
   if (dexPrice === null) {
-    // API unavailable — not an alert, just skip
     return { ok: true, skipped: true };
   }
   if (dexPrice === 0) {
@@ -140,10 +137,10 @@ async function checkAllHealth(currentState, previousState) {
     issues.push({ check: 'Reserve Levels', ...reserves });
   }
 
-  // 4. Price impact check
-  const impact = checkPriceImpact(currentState.bioReserve, currentState.aubraiReserve);
-  if (!impact.ok) {
-    issues.push({ check: 'Price Impact', ...impact });
+  // 4. Liquidity check
+  const liq = checkLiquidity(currentState.liquidity);
+  if (!liq.ok) {
+    issues.push({ check: 'Liquidity', ...liq });
   }
 
   // 5. DexScreener cross-reference
@@ -161,4 +158,4 @@ async function checkAllHealth(currentState, previousState) {
   return issues;
 }
 
-module.exports = { checkPriceStability, checkReserves, checkSpotPriceSanity, checkPriceImpact, calculatePriceImpact, checkDexScreenerDeviation, checkAllHealth };
+module.exports = { checkPriceStability, checkReserves, checkSpotPriceSanity, checkLiquidity, checkSwapSlippage, checkDexScreenerDeviation, checkAllHealth };
