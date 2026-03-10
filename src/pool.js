@@ -161,8 +161,11 @@ function parseSwapEvent(log) {
 
 /**
  * Poll for new Swap events since lastCheckedBlock.
+ * Chunks requests to max 10 blocks to stay within Alchemy free tier limits.
  * Returns an array of parsed swap objects.
  */
+const MAX_BLOCK_RANGE = 10;
+
 async function pollSwapEvents() {
   if (!poolContract) await init();
 
@@ -176,18 +179,29 @@ async function pollSwapEvents() {
 
   if (currentBlock <= lastCheckedBlock) return [];
 
-  const fromBlock = lastCheckedBlock + 1;
   const swapFilter = poolContract.filters.Swap();
-  const logs = await provider.getLogs({
-    ...swapFilter,
-    address: config.poolAddress,
-    fromBlock,
-    toBlock: currentBlock,
-  });
+  const allLogs = [];
+  let from = lastCheckedBlock + 1;
+
+  while (from <= currentBlock) {
+    const to = Math.min(from + MAX_BLOCK_RANGE - 1, currentBlock);
+    try {
+      const logs = await provider.getLogs({
+        ...swapFilter,
+        address: config.poolAddress,
+        fromBlock: from,
+        toBlock: to,
+      });
+      allLogs.push(...logs);
+    } catch (err) {
+      console.error(`[swaps] getLogs failed for blocks ${from}-${to}: ${err.message}`);
+    }
+    from = to + 1;
+  }
 
   lastCheckedBlock = currentBlock;
 
-  return logs.map(parseSwapEvent);
+  return allLogs.map(parseSwapEvent);
 }
 
 module.exports = { init, getPoolState, priceFromSqrtX96, getDexScreenerPrice, setLastKnownPrice, pollSwapEvents };

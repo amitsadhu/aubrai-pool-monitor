@@ -172,4 +172,84 @@ async function sendSwapAlert(swapData) {
   }
 }
 
-module.exports = { sendTelegramAlert, sendSwapAlert };
+/**
+ * Send a bot health error to the admin's personal DM.
+ * Uses a 5-minute cooldown to avoid spamming.
+ */
+let lastAdminAlertTime = 0;
+
+async function sendAdminAlert(errorMessage) {
+  if (!config.telegramBotToken || !config.telegramAdminChatId) return;
+
+  // 5-minute cooldown for admin alerts
+  if (Date.now() - lastAdminAlertTime < config.alertCooldownMs) return;
+
+  const text = `\u{1F527} *Bot Health Error*\n\n${escTg(errorMessage)}`;
+  const url = `https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`;
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: config.telegramAdminChatId,
+        text,
+        parse_mode: 'MarkdownV2',
+      }),
+    });
+
+    if (res.ok) {
+      lastAdminAlertTime = Date.now();
+      console.log('[alerts] Admin DM sent for bot error');
+    }
+  } catch (err) {
+    console.error('[alerts] Failed to send admin DM:', err.message);
+  }
+}
+
+/**
+ * Send a daily "Pool OK" status report to the group topic.
+ */
+async function sendDailyStatus(poolState) {
+  if (!config.telegramBotToken || !config.telegramChatId) return;
+
+  const text = [
+    `\u2705 *AUBRAI/BIO Daily Status*`,
+    '',
+    `\\- 1 AUBRAI \\= ${escTg(fmt(poolState.spotPrice))} BIO`,
+    `\\- 1 BIO \\= ${escTg(fmt(poolState.aubraiPerBio, 4))} AUBRAI`,
+    `\\- AUBRAI Reserve: ${escTg(fmt(poolState.aubraiReserve))}`,
+    `\\- BIO Reserve: ${escTg(fmt(poolState.bioReserve))}`,
+    `\\- Tick: ${escTg(poolState.tick)}`,
+    '',
+    `All checks passing\\.`,
+    '',
+    `[Aerodrome](${config.aerodromePoolUrl}) \\| [BaseScan](${config.basescanPoolUrl}) \\| [DexScreener](${config.dexscreenerPoolUrl})`,
+  ].join('\n');
+
+  const url = `https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`;
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: config.telegramChatId,
+        ...(config.telegramThreadId && { message_thread_id: config.telegramThreadId }),
+        text,
+        parse_mode: 'MarkdownV2',
+      }),
+    });
+
+    if (res.ok) {
+      console.log('[alerts] Daily status sent to topic');
+    } else {
+      const body = await res.text();
+      console.error(`[alerts] Daily status failed: ${res.status}: ${body}`);
+    }
+  } catch (err) {
+    console.error('[alerts] Failed to send daily status:', err.message);
+  }
+}
+
+module.exports = { sendTelegramAlert, sendSwapAlert, sendAdminAlert, sendDailyStatus };

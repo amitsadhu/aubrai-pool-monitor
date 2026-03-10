@@ -8,6 +8,7 @@ const config = {
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN,
   telegramChatId: process.env.TELEGRAM_CHAT_ID,
   telegramThreadId: process.env.TELEGRAM_THREAD_ID ? Number(process.env.TELEGRAM_THREAD_ID) : undefined,
+  telegramAdminChatId: process.env.TELEGRAM_ADMIN_CHAT_ID,  // DM for bot health errors
 
   // Pool — Aerodrome SlipStream (concentrated liquidity)
   poolAddress: '0x6744257f30D991fF0de9f5Aa2AcD03f8093e7067',
