@@ -1,4 +1,5 @@
 const config = require('./config');
+const { getDexScreenerData } = require('./pool');
 
 // Track last alert time per check type for cooldown
 const lastAlertTimes = {};
@@ -213,19 +214,46 @@ async function sendAdminAlert(errorMessage) {
 async function sendDailyStatus(poolState) {
   if (!config.telegramBotToken || !config.telegramChatId) return;
 
-  const text = [
+  // Fetch USD prices from DexScreener
+  const dexData = await getDexScreenerData();
+  const aubraiUsd = dexData?.priceUsd || null;
+  const bioUsd = aubraiUsd && poolState.spotPrice ? aubraiUsd / poolState.spotPrice : null;
+
+  const aubraiReserveUsd = aubraiUsd ? poolState.aubraiReserve * aubraiUsd : null;
+  const bioReserveUsd = bioUsd ? poolState.bioReserve * bioUsd : null;
+  const totalTvl = aubraiReserveUsd && bioReserveUsd ? aubraiReserveUsd + bioReserveUsd : null;
+
+  const usdTag = (usd) => usd !== null ? ` \\(~\\$${escTg(fmt(usd))}\\)` : '';
+
+  const lines = [
     `\u2705 *AUBRAI/BIO Daily Status*`,
     '',
-    `\\- 1 AUBRAI \\= ${escTg(fmt(poolState.spotPrice))} BIO`,
-    `\\- 1 BIO \\= ${escTg(fmt(poolState.aubraiPerBio, 4))} AUBRAI`,
-    `\\- AUBRAI Reserve: ${escTg(fmt(poolState.aubraiReserve))}`,
-    `\\- BIO Reserve: ${escTg(fmt(poolState.bioReserve))}`,
+    `*Pool State:*`,
+    `\\- 1 AUBRAI \\= ${escTg(fmt(poolState.spotPrice))} BIO${aubraiUsd ? ` \\(\\$${escTg(fmt(aubraiUsd, 4))}\\)` : ''}`,
+    `\\- 1 BIO \\= ${escTg(fmt(poolState.aubraiPerBio, 4))} AUBRAI${bioUsd ? ` \\(\\$${escTg(fmt(bioUsd, 4))}\\)` : ''}`,
+    `\\- AUBRAI Reserve: ${escTg(fmt(poolState.aubraiReserve))}${usdTag(aubraiReserveUsd)}`,
+    `\\- BIO Reserve: ${escTg(fmt(poolState.bioReserve))}${usdTag(bioReserveUsd)}`,
+  ];
+
+  if (totalTvl) {
+    lines.push(`\\- Total TVL: ~\\$${escTg(fmt(totalTvl))}`);
+  }
+
+  lines.push(
     `\\- Tick: ${escTg(poolState.tick)}`,
     '',
-    `All checks passing\\.`,
+    `*Checks \\(all passing\\):*`,
+    `\\- Price sanity: within ${escTg(config.minSanePrice)}–${escTg(fmt(config.maxSanePrice))} BIO/AUBRAI \\u2713`,
+    `\\- Price stability: \\<${escTg(config.priceChangeThreshold)}% change \\u2713`,
+    `\\- Reserves: AUBRAI \\>${escTg(fmt(config.minReserveAubrai))}, BIO \\>${escTg(fmt(config.minReserveBio))} \\u2713`,
+    `\\- Liquidity: \\>${escTg(fmt(Number(config.minLiquidity)))} \\u2713`,
+    `\\- DexScreener deviation: \\<${escTg(config.dexscreenerDeviation)}% \\u2713`,
+    `\\- Swap slippage: \\<${escTg(config.swapSlippageThreshold)}% \\u2713`,
     '',
     `[Aerodrome](${config.aerodromePoolUrl}) \\| [BaseScan](${config.basescanPoolUrl}) \\| [DexScreener](${config.dexscreenerPoolUrl})`,
-  ].join('\n');
+  );
+
+  const text = lines.join('\n');
 
   const url = `https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`;
 

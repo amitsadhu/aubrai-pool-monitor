@@ -92,17 +92,25 @@ async function getPoolState() {
  * Fetch price from DexScreener API for cross-reference.
  * Returns the price ratio (BIO per AUBRAI) or null on failure.
  */
-async function getDexScreenerPrice() {
+async function getDexScreenerData() {
   try {
     const res = await fetch(config.dexscreenerApiUrl);
     if (!res.ok) return null;
     const data = await res.json();
     const pair = data.pairs?.[0];
     if (!pair) return null;
-    return parseFloat(pair.priceNative);
+    return {
+      priceNative: parseFloat(pair.priceNative),
+      priceUsd: parseFloat(pair.priceUsd) || null,
+    };
   } catch {
     return null;
   }
+}
+
+async function getDexScreenerPrice() {
+  const data = await getDexScreenerData();
+  return data ? data.priceNative : null;
 }
 
 // Track last known price for slippage calculation on swap events
@@ -204,4 +212,4 @@ async function pollSwapEvents() {
   return allLogs.map(parseSwapEvent);
 }
 
-module.exports = { init, getPoolState, priceFromSqrtX96, getDexScreenerPrice, setLastKnownPrice, pollSwapEvents };
+module.exports = { init, getPoolState, priceFromSqrtX96, getDexScreenerPrice, getDexScreenerData, setLastKnownPrice, pollSwapEvents };
