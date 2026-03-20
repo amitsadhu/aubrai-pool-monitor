@@ -1,7 +1,7 @@
 const config = require('./config');
 const { init, getPoolState, setLastKnownPrice, pollSwapEvents, pollCLMintBurnEvents, pollVitaEvents } = require('./pool');
 const { checkAllHealth, checkSwapSlippage } = require('./checks');
-const { sendTelegramAlert, sendSwapAlert, sendAdminAlert, sendDailyStatus, sendDailyStats } = require('./alerts');
+const { sendTelegramAlert, sendSwapAlert, sendAdminAlert, sendAdminDM, sendDailyStatus, sendDailyStats } = require('./alerts');
 const { recordAubraiSwap, recordAubraiMint, recordAubraiBurn, recordVitaSwap, recordVitaMint, recordVitaBurn, snapshotAndReset } = require('./stats');
 
 function fmt(n, digits = 2) {
@@ -101,6 +101,9 @@ async function start() {
   console.log('---');
 
   await init();
+
+  // Notify admin that bot (re)started
+  await sendAdminDM('\u2705 *Bot started*\\. Polling is active\\.');
 
   await poll();
   pollTimer = setInterval(poll, config.pollIntervalMs);

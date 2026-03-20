@@ -174,6 +174,31 @@ async function sendSwapAlert(swapData) {
 }
 
 /**
+ * Send a message to the admin's personal DM (no cooldown).
+ */
+async function sendAdminDM(text) {
+  if (!config.telegramBotToken || !config.telegramAdminChatId) return;
+
+  const url = `https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`;
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: config.telegramAdminChatId,
+        text,
+        parse_mode: 'MarkdownV2',
+      }),
+    });
+    if (res.ok) {
+      console.log('[alerts] Admin DM sent');
+    }
+  } catch (err) {
+    console.error('[alerts] Failed to send admin DM:', err.message);
+  }
+}
+
+/**
  * Send a bot health error to the admin's personal DM.
  * Uses a 5-minute cooldown to avoid spamming.
  */
@@ -185,27 +210,8 @@ async function sendAdminAlert(errorMessage) {
   // 5-minute cooldown for admin alerts
   if (Date.now() - lastAdminAlertTime < config.alertCooldownMs) return;
 
-  const text = `\u{1F527} *Bot Health Error*\n\n${escTg(errorMessage)}`;
-  const url = `https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`;
-
-  try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: config.telegramAdminChatId,
-        text,
-        parse_mode: 'MarkdownV2',
-      }),
-    });
-
-    if (res.ok) {
-      lastAdminAlertTime = Date.now();
-      console.log('[alerts] Admin DM sent for bot error');
-    }
-  } catch (err) {
-    console.error('[alerts] Failed to send admin DM:', err.message);
-  }
+  lastAdminAlertTime = Date.now();
+  await sendAdminDM(`\u{1F527} *Bot Health Error*\n\n${escTg(errorMessage)}`);
 }
 
 /**
@@ -374,81 +380,31 @@ async function sendDailyStats(snapshot) {
   vitaLines.push('');
   vitaLines.push(`VITA $${escTg(fmt(vitaUsd || 0, 4))} \\| BIO $${escTg(fmt(bioUsd || 0, 4))}`);
 
-  // --- Verify swap counts against DexScreener before sending ---
+  // --- Send stats messages ---
   const url = `https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`;
 
-  async function verifyAndSend(label, swapCount, dexUrls, messageText) {
-    let dexSwapCount = 0;
-    let verified = false;
+  for (const [label, messageText] of [['AUBRAI', aubraiLines.join('\n')], ['VITA', vitaLines.join('\n')]]) {
     try {
-      for (const dexUrl of dexUrls) {
-        const res = await fetch(dexUrl);
-        const data = await res.json();
-        const pair = data.pairs?.[0];
-        if (pair) {
-          dexSwapCount += (pair.txns?.h24?.buys || 0) + (pair.txns?.h24?.sells || 0);
-        }
-      }
-      // Fail if DexScreener shows swaps but we counted 0 (silent failure)
-      // Otherwise allow up to 30% deviation for window alignment differences
-      if (dexSwapCount > 0 && swapCount === 0) {
-        verified = false;
-      } else if (dexSwapCount === 0) {
-        verified = true;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: config.telegramChatId,
+          message_thread_id: config.telegramStatsThreadId,
+          text: messageText,
+          parse_mode: 'MarkdownV2',
+        }),
+      });
+      if (res.ok) {
+        console.log(`[stats] ${label} daily stats sent`);
       } else {
-        const deviation = Math.abs(swapCount - dexSwapCount) / dexSwapCount;
-        verified = deviation <= 0.3;
+        const body = await res.text();
+        console.error(`[stats] ${label} daily stats failed: ${res.status}: ${body}`);
       }
-      console.log(`[stats] ${label} verification: bot=${swapCount} dex=${dexSwapCount} → ${verified ? 'OK' : 'MISMATCH'}`);
     } catch (err) {
-      console.error(`[stats] ${label} DexScreener verification failed:`, err.message);
-    }
-
-    if (verified) {
-      try {
-        const res = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            chat_id: config.telegramChatId,
-            message_thread_id: config.telegramStatsThreadId,
-            text: messageText,
-            parse_mode: 'MarkdownV2',
-          }),
-        });
-        if (res.ok) {
-          console.log(`[stats] ${label} daily stats sent`);
-        } else {
-          const body = await res.text();
-          console.error(`[stats] ${label} daily stats failed: ${res.status}: ${body}`);
-        }
-      } catch (err) {
-        console.error(`[stats] Failed to send ${label} daily stats:`, err.message);
-      }
-    } else {
-      console.warn(`[stats] ${label} stats mismatch — skipping topic report`);
-      if (config.telegramAdminChatId) {
-        const mismatchText = `\u26A0\uFE0F *${escTg(label)} Stats Mismatch*\n\nBot counted: ${escTg(swapCount)} swaps\nDexScreener 24h: ${escTg(dexSwapCount)} swaps\n\n${escTg(label)} daily stats report was *not sent* to the topic\\.`;
-        try {
-          await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              chat_id: config.telegramAdminChatId,
-              text: mismatchText,
-              parse_mode: 'MarkdownV2',
-            }),
-          });
-          console.log(`[stats] ${label} mismatch alert sent to admin DM`);
-        } catch (err) {
-          console.error(`[stats] Failed to send ${label} mismatch alert:`, err.message);
-        }
-      }
+      console.error(`[stats] Failed to send ${label} daily stats:`, err.message);
     }
   }
-
-  await verifyAndSend('AUBRAI', a.swaps.count, [config.dexscreenerApiUrl], aubraiLines.join('\n'));
-  await verifyAndSend('VITA', v.swaps.count, config.vitaPools.map(p => p.dexscreenerApiUrl), vitaLines.join('\n'));
 }
 
-module.exports = { sendTelegramAlert, sendSwapAlert, sendAdminAlert, sendDailyStatus, sendDailyStats };
+module.exports = { sendTelegramAlert, sendSwapAlert, sendAdminAlert, sendAdminDM, sendDailyStatus, sendDailyStats };
