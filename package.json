@@ -1,7 +1,7 @@
 {
-  "name": "aubrai-bio-pool-monitor",
-  "version": "2.0.0",
-  "description": "AUBRAI/BIO Aerodrome SlipStream pool health monitor",
+  "name": "pool-health-monitor",
+  "version": "3.0.0",
+  "description": "AUBRAI/BIO + VITA/BIO Aerodrome pool health monitor with daily stats",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js"

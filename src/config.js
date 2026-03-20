@@ -9,6 +9,7 @@ const config = {
   telegramChatId: process.env.TELEGRAM_CHAT_ID,
   telegramThreadId: process.env.TELEGRAM_THREAD_ID ? Number(process.env.TELEGRAM_THREAD_ID) : undefined,
   telegramAdminChatId: process.env.TELEGRAM_ADMIN_CHAT_ID,  // DM for bot health errors
+  telegramStatsThreadId: process.env.TELEGRAM_STATS_THREAD_ID ? Number(process.env.TELEGRAM_STATS_THREAD_ID) : undefined,
 
   // Pool — Aerodrome SlipStream (concentrated liquidity)
   poolAddress: '0x6744257f30D991fF0de9f5Aa2AcD03f8093e7067',
@@ -24,6 +25,25 @@ const config = {
     decimals: 18,
     symbol: 'BIO',
   },
+  vita: {
+    address: '0x490a4B510d0Ea9f835D2dF29Eb73b4FcA5071937',
+    decimals: 18,
+    symbol: 'VITA',
+  },
+
+  // VITA/BIO V2 CPMM pools on Aerodrome
+  vitaPools: [
+    {
+      address: '0x5bd27255061a0e8bce2fc32bbb50d3be4e0b28bd',
+      dexscreenerUrl: 'https://dexscreener.com/base/0x5bd27255061a0e8bce2fc32bbb50d3be4e0b28bd',
+      dexscreenerApiUrl: 'https://api.dexscreener.com/latest/dex/pairs/base/0x5bd27255061a0e8bce2fc32bbb50d3be4e0b28bd',
+    },
+    {
+      address: '0xa81b95635682295cbd25129199420ae195dcef89',
+      dexscreenerUrl: 'https://dexscreener.com/base/0xa81b95635682295cbd25129199420ae195dcef89',
+      dexscreenerApiUrl: 'https://api.dexscreener.com/latest/dex/pairs/base/0xa81b95635682295cbd25129199420ae195dcef89',
+    },
+  ],
 
   // Thresholds
   priceChangeThreshold: 20,       // % change between polls triggers alert

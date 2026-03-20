@@ -1,5 +1,5 @@
 const config = require('./config');
-const { getDexScreenerData } = require('./pool');
+const { getDexScreenerData, getVitaDexScreenerData } = require('./pool');
 
 // Track last alert time per check type for cooldown
 const lastAlertTimes = {};
@@ -223,7 +223,7 @@ async function sendDailyStatus(poolState) {
   const bioReserveUsd = bioUsd ? poolState.bioReserve * bioUsd : null;
   const totalTvl = aubraiReserveUsd && bioReserveUsd ? aubraiReserveUsd + bioReserveUsd : null;
 
-  const usdTag = (usd) => usd !== null ? ` \\(~\\$${escTg(fmt(usd))}\\)` : '';
+  const usdTag = (usd) => usd !== null ? ` \\(\\~\\$${escTg(fmt(usd))}\\)` : '';
 
   const lines = [
     `\u2705 *AUBRAI/BIO Daily Status*`,
@@ -236,7 +236,7 @@ async function sendDailyStatus(poolState) {
   ];
 
   if (totalTvl) {
-    lines.push(`\\- Total TVL: ~\\$${escTg(fmt(totalTvl))}`);
+    lines.push(`\\- Total TVL: \\~\\$${escTg(fmt(totalTvl))}`);
   }
 
   lines.push(
@@ -280,4 +280,166 @@ async function sendDailyStatus(poolState) {
   }
 }
 
-module.exports = { sendTelegramAlert, sendSwapAlert, sendAdminAlert, sendDailyStatus };
+/**
+ * Send daily swap/LP stats for both AUBRAI and VITA pools.
+ * Sends two separate messages (one per token) to the "Pool Stats" topic.
+ */
+async function sendDailyStats(snapshot) {
+  if (!config.telegramBotToken || !config.telegramChatId || !config.telegramStatsThreadId) {
+    console.warn('[stats] Missing Telegram config for stats — skipping');
+    return;
+  }
+
+  // Fetch USD prices
+  const aubraiDex = await getDexScreenerData();
+  const vitaDex = await getVitaDexScreenerData();
+
+  const aubraiUsd = aubraiDex?.priceUsd || null;
+  const vitaUsd = vitaDex?.priceUsd || null;
+
+  let bioUsd = null;
+  if (aubraiUsd && aubraiDex?.priceNative) {
+    bioUsd = aubraiUsd / aubraiDex.priceNative;
+  } else if (vitaUsd && vitaDex?.priceNative) {
+    bioUsd = vitaUsd / vitaDex.priceNative;
+  }
+
+  const windowMs = (snapshot.periodEnd || Date.now()) - snapshot.periodStart;
+  const windowHours = Math.round(windowMs / 3600000 * 10) / 10;
+
+  function $(amount, price) {
+    if (!price || amount === 0) return '';
+    return ` \\($${escTg(fmt(amount * price))}\\)`;
+  }
+
+  // --- AUBRAI message ---
+  const a = snapshot.aubrai;
+  const aubraiLines = [
+    `\u{1F7EA} *AUBRAI/BIO \\| Daily Stats* \\(${escTg(windowHours)}h\\)`,
+    `_SlipStream CL pool_`,
+    '',
+    `*Swaps* \\(${escTg(a.swaps.count)}\\)`,
+  ];
+  if (a.swaps.count === 0) {
+    aubraiLines.push(`No swaps`);
+  } else {
+    aubraiLines.push(`\u{1F7E2} Bought: ${escTg(fmt(a.swaps.bought.tokens))} AUBRAI${$(a.swaps.bought.tokens, aubraiUsd)}`);
+    aubraiLines.push(`   ${escTg(fmt(a.swaps.bought.bio))} BIO spent`);
+    aubraiLines.push(`\u{1F534} Sold: ${escTg(fmt(a.swaps.sold.tokens))} AUBRAI${$(a.swaps.sold.tokens, aubraiUsd)}`);
+    aubraiLines.push(`   ${escTg(fmt(a.swaps.sold.bio))} BIO received`);
+  }
+  aubraiLines.push('');
+  aubraiLines.push(`*Liquidity* \\(${escTg(a.lp.mintCount)} adds, ${escTg(a.lp.burnCount)} removes\\)`);
+  if (a.lp.mintCount + a.lp.burnCount === 0) {
+    aubraiLines.push(`No LP changes`);
+  } else {
+    if (a.lp.mintCount > 0) {
+      aubraiLines.push(`\u2795 Added: ${escTg(fmt(a.lp.added.tokens))} AUBRAI${$(a.lp.added.tokens, aubraiUsd)} \\+ ${escTg(fmt(a.lp.added.bio))} BIO${$(a.lp.added.bio, bioUsd)}`);
+    }
+    if (a.lp.burnCount > 0) {
+      aubraiLines.push(`\u2796 Removed: ${escTg(fmt(a.lp.withdrawn.tokens))} AUBRAI${$(a.lp.withdrawn.tokens, aubraiUsd)} \\+ ${escTg(fmt(a.lp.withdrawn.bio))} BIO${$(a.lp.withdrawn.bio, bioUsd)}`);
+    }
+  }
+  aubraiLines.push('');
+  aubraiLines.push(`AUBRAI $${escTg(fmt(aubraiUsd || 0, 4))} \\| BIO $${escTg(fmt(bioUsd || 0, 4))}`);
+
+  // --- VITA message ---
+  const v = snapshot.vita;
+  const vitaLines = [
+    `\u{1F7E1} *VITA/BIO \\| Daily Stats* \\(${escTg(windowHours)}h\\)`,
+    `_SlipStream CL \\(2 pools\\)_`,
+    '',
+    `*Swaps* \\(${escTg(v.swaps.count)}\\)`,
+  ];
+  if (v.swaps.count === 0) {
+    vitaLines.push(`No swaps`);
+  } else {
+    vitaLines.push(`\u{1F7E2} Bought: ${escTg(fmt(v.swaps.bought.tokens))} VITA${$(v.swaps.bought.tokens, vitaUsd)}`);
+    vitaLines.push(`   ${escTg(fmt(v.swaps.bought.bio))} BIO spent`);
+    vitaLines.push(`\u{1F534} Sold: ${escTg(fmt(v.swaps.sold.tokens))} VITA${$(v.swaps.sold.tokens, vitaUsd)}`);
+    vitaLines.push(`   ${escTg(fmt(v.swaps.sold.bio))} BIO received`);
+  }
+  vitaLines.push('');
+  vitaLines.push(`*Liquidity* \\(${escTg(v.lp.mintCount)} adds, ${escTg(v.lp.burnCount)} removes\\)`);
+  if (v.lp.mintCount + v.lp.burnCount === 0) {
+    vitaLines.push(`No LP changes`);
+  } else {
+    if (v.lp.mintCount > 0) {
+      vitaLines.push(`\u2795 Added: ${escTg(fmt(v.lp.added.tokens))} VITA${$(v.lp.added.tokens, vitaUsd)} \\+ ${escTg(fmt(v.lp.added.bio))} BIO${$(v.lp.added.bio, bioUsd)}`);
+    }
+    if (v.lp.burnCount > 0) {
+      vitaLines.push(`\u2796 Removed: ${escTg(fmt(v.lp.withdrawn.tokens))} VITA${$(v.lp.withdrawn.tokens, vitaUsd)} \\+ ${escTg(fmt(v.lp.withdrawn.bio))} BIO${$(v.lp.withdrawn.bio, bioUsd)}`);
+    }
+  }
+  vitaLines.push('');
+  vitaLines.push(`VITA $${escTg(fmt(vitaUsd || 0, 4))} \\| BIO $${escTg(fmt(bioUsd || 0, 4))}`);
+
+  // --- Verify swap counts against DexScreener before sending ---
+  const url = `https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`;
+
+  async function verifyAndSend(label, swapCount, dexUrls, messageText) {
+    let dexSwapCount = 0;
+    let verified = false;
+    try {
+      for (const dexUrl of dexUrls) {
+        const res = await fetch(dexUrl);
+        const data = await res.json();
+        const pair = data.pairs?.[0];
+        if (pair) {
+          dexSwapCount += (pair.txns?.h24?.buys || 0) + (pair.txns?.h24?.sells || 0);
+        }
+      }
+      verified = (swapCount === dexSwapCount);
+      console.log(`[stats] ${label} verification: bot=${swapCount} dex=${dexSwapCount} → ${verified ? 'MATCH' : 'MISMATCH'}`);
+    } catch (err) {
+      console.error(`[stats] ${label} DexScreener verification failed:`, err.message);
+    }
+
+    if (verified) {
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: config.telegramChatId,
+            message_thread_id: config.telegramStatsThreadId,
+            text: messageText,
+            parse_mode: 'MarkdownV2',
+          }),
+        });
+        if (res.ok) {
+          console.log(`[stats] ${label} daily stats sent`);
+        } else {
+          const body = await res.text();
+          console.error(`[stats] ${label} daily stats failed: ${res.status}: ${body}`);
+        }
+      } catch (err) {
+        console.error(`[stats] Failed to send ${label} daily stats:`, err.message);
+      }
+    } else {
+      console.warn(`[stats] ${label} stats mismatch — skipping topic report`);
+      if (config.telegramAdminChatId) {
+        const mismatchText = `\u26A0\uFE0F *${escTg(label)} Stats Mismatch*\n\nBot counted: ${escTg(swapCount)} swaps\nDexScreener 24h: ${escTg(dexSwapCount)} swaps\n\n${escTg(label)} daily stats report was *not sent* to the topic\\.`;
+        try {
+          await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: config.telegramAdminChatId,
+              text: mismatchText,
+              parse_mode: 'MarkdownV2',
+            }),
+          });
+          console.log(`[stats] ${label} mismatch alert sent to admin DM`);
+        } catch (err) {
+          console.error(`[stats] Failed to send ${label} mismatch alert:`, err.message);
+        }
+      }
+    }
+  }
+
+  await verifyAndSend('AUBRAI', a.swaps.count, [config.dexscreenerApiUrl], aubraiLines.join('\n'));
+  await verifyAndSend('VITA', v.swaps.count, config.vitaPools.map(p => p.dexscreenerApiUrl), vitaLines.join('\n'));
+}
+
+module.exports = { sendTelegramAlert, sendSwapAlert, sendAdminAlert, sendDailyStatus, sendDailyStats };
