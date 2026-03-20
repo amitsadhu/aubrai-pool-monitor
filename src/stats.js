@@ -142,19 +142,8 @@ function snapshotAndReset() {
   return snapshot;
 }
 
-function needsBackfill() {
-  // Force backfill via env var (remove after use)
-  if (process.env.FORCE_BACKFILL === 'true') {
-    console.log('[stats] FORCE_BACKFILL=true — deleting existing stats file');
-    deleteFromDisk();
-    return fs.existsSync(STATS_DIR);
-  }
-  // Backfill needed if volume exists but no stats file
-  return fs.existsSync(STATS_DIR) && !fs.existsSync(STATS_FILE);
-}
-
 module.exports = {
   recordAubraiSwap, recordAubraiMint, recordAubraiBurn,
   recordVitaSwap, recordVitaMint, recordVitaBurn,
-  snapshotAndReset, needsBackfill,
+  snapshotAndReset,
 };
