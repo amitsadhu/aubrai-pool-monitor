@@ -385,9 +385,110 @@ async function pollVitaEvents() {
   return { swaps: allSwaps, mints: allMints, burns: allBurns };
 }
 
+/**
+ * Backfill all events (AUBRAI + VITA) from a given block to current.
+ * Used on startup when no stats file exists, to recover events since last 9:00 CET.
+ * Rate-limited to avoid saturating Alchemy.
+ */
+async function backfillEvents(fromBlock) {
+  if (!poolContract) await init();
+
+  const currentBlock = await provider.getBlockNumber();
+  if (fromBlock >= currentBlock) return { aubrai: { swaps: [], mints: [], burns: [] }, vita: { swaps: [], mints: [], burns: [] } };
+
+  const DELAY_MS = 100;
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+  const totalChunks = Math.ceil((currentBlock - fromBlock) / MAX_BLOCK_RANGE);
+  console.log(`[backfill] Scanning blocks ${fromBlock}–${currentBlock} (~${totalChunks} chunks per pool)`);
+
+  // --- AUBRAI events ---
+  const aubraiSwapTopic = poolContract.interface.getEvent('Swap').topicHash;
+  const aubraiMintTopic = poolContract.interface.getEvent('Mint').topicHash;
+  const aubraiBurnTopic = poolContract.interface.getEvent('Burn').topicHash;
+
+  const aubraiSwaps = [], aubraiMints = [], aubraiBurns = [];
+  let from = fromBlock;
+  let chunksProcessed = 0;
+
+  while (from <= currentBlock) {
+    const to = Math.min(from + MAX_BLOCK_RANGE - 1, currentBlock);
+    try {
+      const logs = await provider.getLogs({
+        address: config.poolAddress,
+        topics: [[aubraiSwapTopic, aubraiMintTopic, aubraiBurnTopic]],
+        fromBlock: from,
+        toBlock: to,
+      });
+      for (const log of logs) {
+        if (log.topics[0] === aubraiSwapTopic) aubraiSwaps.push(parseSwapEvent(log));
+        else if (log.topics[0] === aubraiMintTopic) aubraiMints.push(parseCLMintEvent(log));
+        else aubraiBurns.push(parseCLBurnEvent(log));
+      }
+    } catch (err) {
+      // skip failed chunks
+    }
+    from = to + 1;
+    chunksProcessed++;
+    if (chunksProcessed % 500 === 0) {
+      console.log(`[backfill] AUBRAI: ${Math.round(chunksProcessed / totalChunks * 100)}%`);
+    }
+    await sleep(DELAY_MS);
+  }
+  console.log(`[backfill] AUBRAI: ${aubraiSwaps.length} swaps, ${aubraiMints.length} mints, ${aubraiBurns.length} burns`);
+
+  // --- VITA events ---
+  const vitaSwaps = [], vitaMints = [], vitaBurns = [];
+  for (const pool of vitaPools) {
+    const swapTopic = pool.contract.interface.getEvent('Swap').topicHash;
+    const mintTopic = pool.contract.interface.getEvent('Mint').topicHash;
+    const burnTopic = pool.contract.interface.getEvent('Burn').topicHash;
+
+    from = fromBlock;
+    chunksProcessed = 0;
+
+    while (from <= currentBlock) {
+      const to = Math.min(from + MAX_BLOCK_RANGE - 1, currentBlock);
+      try {
+        const logs = await provider.getLogs({
+          address: pool.address,
+          topics: [[swapTopic, mintTopic, burnTopic]],
+          fromBlock: from,
+          toBlock: to,
+        });
+        for (const log of logs) {
+          if (log.topics[0] === swapTopic) vitaSwaps.push(parseVitaSwapEvent(log, pool));
+          else if (log.topics[0] === mintTopic) vitaMints.push(parseVitaMintEvent(log, pool));
+          else vitaBurns.push(parseVitaBurnEvent(log, pool));
+        }
+      } catch (err) {
+        // skip failed chunks
+      }
+      from = to + 1;
+      chunksProcessed++;
+      if (chunksProcessed % 500 === 0) {
+        console.log(`[backfill] VITA ${pool.address.slice(0, 8)}: ${Math.round(chunksProcessed / totalChunks * 100)}%`);
+      }
+      await sleep(DELAY_MS);
+    }
+  }
+  console.log(`[backfill] VITA: ${vitaSwaps.length} swaps, ${vitaMints.length} mints, ${vitaBurns.length} burns`);
+
+  // Update block trackers so normal polling continues from here
+  lastCheckedBlock = currentBlock;
+  lastCLMintBurnBlock = currentBlock;
+  lastVitaCheckedBlock = currentBlock;
+
+  return {
+    aubrai: { swaps: aubraiSwaps, mints: aubraiMints, burns: aubraiBurns },
+    vita: { swaps: vitaSwaps, mints: vitaMints, burns: vitaBurns },
+  };
+}
+
 module.exports = {
   init, getPoolState, priceFromSqrtX96,
   getDexScreenerPrice, getDexScreenerData, getVitaDexScreenerData,
   setLastKnownPrice, pollSwapEvents,
   pollCLMintBurnEvents, pollVitaEvents,
+  backfillEvents,
 };

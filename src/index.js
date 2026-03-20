@@ -1,8 +1,8 @@
 const config = require('./config');
-const { init, getPoolState, setLastKnownPrice, pollSwapEvents, pollCLMintBurnEvents, pollVitaEvents } = require('./pool');
+const { init, getPoolState, setLastKnownPrice, pollSwapEvents, pollCLMintBurnEvents, pollVitaEvents, backfillEvents } = require('./pool');
 const { checkAllHealth, checkSwapSlippage } = require('./checks');
 const { sendTelegramAlert, sendSwapAlert, sendAdminAlert, sendDailyStatus, sendDailyStats } = require('./alerts');
-const { recordAubraiSwap, recordAubraiMint, recordAubraiBurn, recordVitaSwap, recordVitaMint, recordVitaBurn, snapshotAndReset } = require('./stats');
+const { recordAubraiSwap, recordAubraiMint, recordAubraiBurn, recordVitaSwap, recordVitaMint, recordVitaBurn, snapshotAndReset, needsBackfill } = require('./stats');
 
 function fmt(n, digits = 2) {
   return Number(n).toLocaleString('en-US', { maximumFractionDigits: digits });
@@ -101,6 +101,37 @@ async function start() {
   console.log('---');
 
   await init();
+
+  // Backfill events from last 9:00 CET if no stats file exists (e.g. after redeploy)
+  if (needsBackfill()) {
+    console.log('[backfill] No stats file found — backfilling from last 9:00 CET...');
+    const { ethers } = require('ethers');
+    const provider = new ethers.JsonRpcProvider(config.rpcUrl);
+
+    // Calculate block number for last 9:00 CET (08:00 UTC)
+    const now = new Date();
+    const last9CET = new Date(now);
+    last9CET.setUTCHours(8, 0, 0, 0);
+    if (last9CET > now) last9CET.setUTCDate(last9CET.getUTCDate() - 1);
+    const secondsAgo = Math.floor((now - last9CET) / 1000);
+    const currentBlock = await provider.getBlockNumber();
+    const blocksAgo = Math.floor(secondsAgo / 2); // ~2s per block on Base
+    const fromBlock = currentBlock - blocksAgo;
+
+    console.log(`[backfill] Last 9:00 CET: ${last9CET.toISOString()} (~${blocksAgo} blocks ago)`);
+
+    const events = await backfillEvents(fromBlock);
+
+    for (const swap of events.aubrai.swaps) recordAubraiSwap(swap);
+    for (const mint of events.aubrai.mints) recordAubraiMint(mint);
+    for (const burn of events.aubrai.burns) recordAubraiBurn(burn);
+    for (const swap of events.vita.swaps) recordVitaSwap(swap);
+    for (const mint of events.vita.mints) recordVitaMint(mint);
+    for (const burn of events.vita.burns) recordVitaBurn(burn);
+
+    console.log('[backfill] Complete — stats populated from on-chain data');
+  }
+
   await poll();
   pollTimer = setInterval(poll, config.pollIntervalMs);
 
