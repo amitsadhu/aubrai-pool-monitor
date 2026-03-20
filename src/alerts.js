@@ -389,8 +389,17 @@ async function sendDailyStats(snapshot) {
           dexSwapCount += (pair.txns?.h24?.buys || 0) + (pair.txns?.h24?.sells || 0);
         }
       }
-      verified = (swapCount === dexSwapCount);
-      console.log(`[stats] ${label} verification: bot=${swapCount} dex=${dexSwapCount} → ${verified ? 'MATCH' : 'MISMATCH'}`);
+      // Fail if DexScreener shows swaps but we counted 0 (silent failure)
+      // Otherwise allow up to 30% deviation for window alignment differences
+      if (dexSwapCount > 0 && swapCount === 0) {
+        verified = false;
+      } else if (dexSwapCount === 0) {
+        verified = true;
+      } else {
+        const deviation = Math.abs(swapCount - dexSwapCount) / dexSwapCount;
+        verified = deviation <= 0.3;
+      }
+      console.log(`[stats] ${label} verification: bot=${swapCount} dex=${dexSwapCount} → ${verified ? 'OK' : 'MISMATCH'}`);
     } catch (err) {
       console.error(`[stats] ${label} DexScreener verification failed:`, err.message);
     }
