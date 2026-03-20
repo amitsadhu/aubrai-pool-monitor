@@ -143,10 +143,14 @@ function snapshotAndReset() {
 }
 
 function needsBackfill() {
-  const dir = STATS_DIR;
-  const file = STATS_FILE;
+  // Force backfill via env var (remove after use)
+  if (process.env.FORCE_BACKFILL === 'true') {
+    console.log('[stats] FORCE_BACKFILL=true — deleting existing stats file');
+    deleteFromDisk();
+    return fs.existsSync(STATS_DIR);
+  }
   // Backfill needed if volume exists but no stats file
-  return fs.existsSync(dir) && !fs.existsSync(file);
+  return fs.existsSync(STATS_DIR) && !fs.existsSync(STATS_FILE);
 }
 
 module.exports = {

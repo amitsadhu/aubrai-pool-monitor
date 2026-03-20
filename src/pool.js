@@ -396,11 +396,31 @@ async function backfillEvents(fromBlock) {
   const currentBlock = await provider.getBlockNumber();
   if (fromBlock >= currentBlock) return { aubrai: { swaps: [], mints: [], burns: [] }, vita: { swaps: [], mints: [], burns: [] } };
 
-  const DELAY_MS = 100;
+  const DELAY_MS = 200;
+  const MAX_RETRIES = 3;
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
+  async function fetchLogsWithRetry(address, topics, from, to) {
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        return await provider.getLogs({ address, topics, fromBlock: from, toBlock: to });
+      } catch (err) {
+        const is429 = err.message?.includes('429') || err.message?.includes('compute units');
+        if (is429 && attempt < MAX_RETRIES) {
+          const backoff = attempt * 2000; // 2s, 4s
+          console.log(`[backfill] 429 rate limit, retrying in ${backoff / 1000}s (attempt ${attempt}/${MAX_RETRIES})`);
+          await sleep(backoff);
+        } else if (attempt === MAX_RETRIES) {
+          console.warn(`[backfill] Failed blocks ${from}-${to} after ${MAX_RETRIES} attempts: ${err.message.substring(0, 80)}`);
+          return [];
+        }
+      }
+    }
+    return [];
+  }
+
   const totalChunks = Math.ceil((currentBlock - fromBlock) / MAX_BLOCK_RANGE);
-  console.log(`[backfill] Scanning blocks ${fromBlock}–${currentBlock} (~${totalChunks} chunks per pool)`);
+  console.log(`[backfill] Scanning blocks ${fromBlock}–${currentBlock} (~${totalChunks} chunks per pool, ${DELAY_MS}ms delay)`);
 
   // --- AUBRAI events ---
   const aubraiSwapTopic = poolContract.interface.getEvent('Swap').topicHash;
@@ -413,20 +433,15 @@ async function backfillEvents(fromBlock) {
 
   while (from <= currentBlock) {
     const to = Math.min(from + MAX_BLOCK_RANGE - 1, currentBlock);
-    try {
-      const logs = await provider.getLogs({
-        address: config.poolAddress,
-        topics: [[aubraiSwapTopic, aubraiMintTopic, aubraiBurnTopic]],
-        fromBlock: from,
-        toBlock: to,
-      });
-      for (const log of logs) {
-        if (log.topics[0] === aubraiSwapTopic) aubraiSwaps.push(parseSwapEvent(log));
-        else if (log.topics[0] === aubraiMintTopic) aubraiMints.push(parseCLMintEvent(log));
-        else aubraiBurns.push(parseCLBurnEvent(log));
-      }
-    } catch (err) {
-      // skip failed chunks
+    const logs = await fetchLogsWithRetry(
+      config.poolAddress,
+      [[aubraiSwapTopic, aubraiMintTopic, aubraiBurnTopic]],
+      from, to,
+    );
+    for (const log of logs) {
+      if (log.topics[0] === aubraiSwapTopic) aubraiSwaps.push(parseSwapEvent(log));
+      else if (log.topics[0] === aubraiMintTopic) aubraiMints.push(parseCLMintEvent(log));
+      else aubraiBurns.push(parseCLBurnEvent(log));
     }
     from = to + 1;
     chunksProcessed++;
@@ -449,20 +464,15 @@ async function backfillEvents(fromBlock) {
 
     while (from <= currentBlock) {
       const to = Math.min(from + MAX_BLOCK_RANGE - 1, currentBlock);
-      try {
-        const logs = await provider.getLogs({
-          address: pool.address,
-          topics: [[swapTopic, mintTopic, burnTopic]],
-          fromBlock: from,
-          toBlock: to,
-        });
-        for (const log of logs) {
-          if (log.topics[0] === swapTopic) vitaSwaps.push(parseVitaSwapEvent(log, pool));
-          else if (log.topics[0] === mintTopic) vitaMints.push(parseVitaMintEvent(log, pool));
-          else vitaBurns.push(parseVitaBurnEvent(log, pool));
-        }
-      } catch (err) {
-        // skip failed chunks
+      const logs = await fetchLogsWithRetry(
+        pool.address,
+        [[swapTopic, mintTopic, burnTopic]],
+        from, to,
+      );
+      for (const log of logs) {
+        if (log.topics[0] === swapTopic) vitaSwaps.push(parseVitaSwapEvent(log, pool));
+        else if (log.topics[0] === mintTopic) vitaMints.push(parseVitaMintEvent(log, pool));
+        else vitaBurns.push(parseVitaBurnEvent(log, pool));
       }
       from = to + 1;
       chunksProcessed++;
