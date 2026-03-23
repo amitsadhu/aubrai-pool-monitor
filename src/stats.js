@@ -12,13 +12,13 @@ const STATS_FILE = path.join(STATS_DIR, 'stats.json');
 function createTokenStats() {
   return {
     swaps: {
-      bought: { tokens: 0, bio: 0 },
-      sold: { tokens: 0, bio: 0 },
+      bought: { tokens: 0, counter: 0 },
+      sold: { tokens: 0, counter: 0 },
       count: 0,
     },
     lp: {
-      added: { tokens: 0, bio: 0 },
-      withdrawn: { tokens: 0, bio: 0 },
+      added: { tokens: 0, counter: 0 },
+      withdrawn: { tokens: 0, counter: 0 },
       mintCount: 0,
       burnCount: 0,
     },
@@ -28,16 +28,51 @@ function createTokenStats() {
 let stats = {
   aubrai: createTokenStats(),
   vita: createTokenStats(),
+  vitaEthereum: createTokenStats(),
   periodStart: Date.now(),
 };
 
 // --- Persistence ---
+
+function ensureTokenStats(obj) {
+  const defaults = createTokenStats();
+  if (!obj) return defaults;
+  // Deep-ensure all nested fields exist, migrate old 'bio' → 'counter'
+  for (const side of ['bought', 'sold']) {
+    if (!obj.swaps) obj.swaps = defaults.swaps;
+    if (!obj.swaps[side]) obj.swaps[side] = defaults.swaps[side];
+    if ('bio' in obj.swaps[side] && !('counter' in obj.swaps[side])) {
+      obj.swaps[side].counter = obj.swaps[side].bio;
+      delete obj.swaps[side].bio;
+    }
+    if (obj.swaps[side].counter === undefined) obj.swaps[side].counter = 0;
+    if (obj.swaps[side].tokens === undefined) obj.swaps[side].tokens = 0;
+  }
+  if (obj.swaps.count === undefined) obj.swaps.count = 0;
+  if (!obj.lp) obj.lp = defaults.lp;
+  for (const side of ['added', 'withdrawn']) {
+    if (!obj.lp[side]) obj.lp[side] = defaults.lp[side];
+    if ('bio' in obj.lp[side] && !('counter' in obj.lp[side])) {
+      obj.lp[side].counter = obj.lp[side].bio;
+      delete obj.lp[side].bio;
+    }
+    if (obj.lp[side].counter === undefined) obj.lp[side].counter = 0;
+    if (obj.lp[side].tokens === undefined) obj.lp[side].tokens = 0;
+  }
+  if (obj.lp.mintCount === undefined) obj.lp.mintCount = 0;
+  if (obj.lp.burnCount === undefined) obj.lp.burnCount = 0;
+  return obj;
+}
 
 function loadFromDisk() {
   try {
     if (fs.existsSync(STATS_FILE)) {
       const data = JSON.parse(fs.readFileSync(STATS_FILE, 'utf8'));
       stats = data;
+      stats.aubrai = ensureTokenStats(stats.aubrai);
+      stats.vita = ensureTokenStats(stats.vita);
+      stats.vitaEthereum = ensureTokenStats(stats.vitaEthereum);
+      if (!stats.periodStart) stats.periodStart = Date.now();
       console.log(`[stats] Loaded stats from disk (period started ${new Date(stats.periodStart).toISOString()})`);
     }
   } catch (err) {
@@ -73,13 +108,11 @@ loadFromDisk();
 function recordAubraiSwap(swap) {
   stats.aubrai.swaps.count++;
   if (swap.direction === 'BIO → AUBRAI') {
-    // Buying AUBRAI
     stats.aubrai.swaps.bought.tokens += swap.aubraiAmount;
-    stats.aubrai.swaps.bought.bio += swap.bioAmount;
+    stats.aubrai.swaps.bought.counter += swap.bioAmount;
   } else {
-    // Selling AUBRAI
     stats.aubrai.swaps.sold.tokens += swap.aubraiAmount;
-    stats.aubrai.swaps.sold.bio += swap.bioAmount;
+    stats.aubrai.swaps.sold.counter += swap.bioAmount;
   }
   saveToDisk();
 }
@@ -87,14 +120,14 @@ function recordAubraiSwap(swap) {
 function recordAubraiMint(mint) {
   stats.aubrai.lp.mintCount++;
   stats.aubrai.lp.added.tokens += mint.aubraiAmount;
-  stats.aubrai.lp.added.bio += mint.bioAmount;
+  stats.aubrai.lp.added.counter += mint.bioAmount;
   saveToDisk();
 }
 
 function recordAubraiBurn(burn) {
   stats.aubrai.lp.burnCount++;
   stats.aubrai.lp.withdrawn.tokens += burn.aubraiAmount;
-  stats.aubrai.lp.withdrawn.bio += burn.bioAmount;
+  stats.aubrai.lp.withdrawn.counter += burn.bioAmount;
   saveToDisk();
 }
 
@@ -102,14 +135,12 @@ function recordAubraiBurn(burn) {
 
 function recordVitaSwap(swap) {
   stats.vita.swaps.count++;
-  if (swap.direction === 'BIO → VITA') {
-    // Buying VITA
+  if (swap.direction === 'bought') {
     stats.vita.swaps.bought.tokens += swap.vitaAmount;
-    stats.vita.swaps.bought.bio += swap.bioAmount;
+    stats.vita.swaps.bought.counter += swap.counterAmount;
   } else {
-    // Selling VITA
     stats.vita.swaps.sold.tokens += swap.vitaAmount;
-    stats.vita.swaps.sold.bio += swap.bioAmount;
+    stats.vita.swaps.sold.counter += swap.counterAmount;
   }
   saveToDisk();
 }
@@ -117,14 +148,42 @@ function recordVitaSwap(swap) {
 function recordVitaMint(mint) {
   stats.vita.lp.mintCount++;
   stats.vita.lp.added.tokens += mint.vitaAmount;
-  stats.vita.lp.added.bio += mint.bioAmount;
+  stats.vita.lp.added.counter += mint.counterAmount;
   saveToDisk();
 }
 
 function recordVitaBurn(burn) {
   stats.vita.lp.burnCount++;
   stats.vita.lp.withdrawn.tokens += burn.vitaAmount;
-  stats.vita.lp.withdrawn.bio += burn.bioAmount;
+  stats.vita.lp.withdrawn.counter += burn.counterAmount;
+  saveToDisk();
+}
+
+// --- VITA (Ethereum) ---
+
+function recordEthVitaSwap(swap) {
+  stats.vitaEthereum.swaps.count++;
+  if (swap.direction === 'bought') {
+    stats.vitaEthereum.swaps.bought.tokens += swap.vitaAmount;
+    stats.vitaEthereum.swaps.bought.counter += swap.counterAmount;
+  } else {
+    stats.vitaEthereum.swaps.sold.tokens += swap.vitaAmount;
+    stats.vitaEthereum.swaps.sold.counter += swap.counterAmount;
+  }
+  saveToDisk();
+}
+
+function recordEthVitaMint(mint) {
+  stats.vitaEthereum.lp.mintCount++;
+  stats.vitaEthereum.lp.added.tokens += mint.vitaAmount;
+  stats.vitaEthereum.lp.added.counter += mint.counterAmount;
+  saveToDisk();
+}
+
+function recordEthVitaBurn(burn) {
+  stats.vitaEthereum.lp.burnCount++;
+  stats.vitaEthereum.lp.withdrawn.tokens += burn.vitaAmount;
+  stats.vitaEthereum.lp.withdrawn.counter += burn.counterAmount;
   saveToDisk();
 }
 
@@ -136,6 +195,7 @@ function snapshotAndReset() {
   stats = {
     aubrai: createTokenStats(),
     vita: createTokenStats(),
+    vitaEthereum: createTokenStats(),
     periodStart: Date.now(),
   };
   deleteFromDisk();
@@ -145,5 +205,6 @@ function snapshotAndReset() {
 module.exports = {
   recordAubraiSwap, recordAubraiMint, recordAubraiBurn,
   recordVitaSwap, recordVitaMint, recordVitaBurn,
+  recordEthVitaSwap, recordEthVitaMint, recordEthVitaBurn,
   snapshotAndReset,
 };

@@ -21,8 +21,12 @@ let aubraiToken;
 let bioToken;
 let aubraiIsToken0;
 
-// VITA CL pools
+// VITA CL pools (Base)
 const vitaPools = []; // { contract, vitaIsToken0, address }
+
+// Ethereum VITA pools (Uniswap v3)
+let ethProvider;
+const ethVitaPools = []; // { contract, vitaIsToken0, address, name }
 
 async function init() {
   provider = new ethers.JsonRpcProvider(config.rpcUrl);
@@ -42,6 +46,26 @@ async function init() {
     const vitaIsToken0 = vitaToken0 === config.vita.address.toLowerCase();
     vitaPools.push({ contract, vitaIsToken0, address: poolCfg.address });
     console.log(`[init] VITA/BIO CL pool ${poolCfg.address}: VITA is token${vitaIsToken0 ? '0' : '1'}`);
+  }
+
+  // Initialize Ethereum VITA pools
+  try {
+    ethProvider = new ethers.JsonRpcProvider(config.ethereumRpcUrl);
+    const ethVitaAddress = config.vitaEthereum.address.toLowerCase();
+    for (const poolCfg of config.ethereumVitaPools) {
+      const contract = new ethers.Contract(poolCfg.address, CL_POOL_ABI, ethProvider);
+      const token0 = (await contract.token0()).toLowerCase();
+      const token1 = (await contract.token1()).toLowerCase();
+      if (token0 !== ethVitaAddress && token1 !== ethVitaAddress) {
+        console.error(`[init] Skipping Ethereum pool ${poolCfg.address} (${poolCfg.name}): VITA not found in pool tokens`);
+        continue;
+      }
+      const vitaIsToken0 = token0 === ethVitaAddress;
+      ethVitaPools.push({ contract, vitaIsToken0, address: poolCfg.address, name: poolCfg.name });
+      console.log(`[init] Ethereum ${poolCfg.name} pool ${poolCfg.address}: VITA is token${vitaIsToken0 ? '0' : '1'}`);
+    }
+  } catch (err) {
+    console.warn('[init] Failed to initialize Ethereum pools:', err.message);
   }
 }
 
@@ -144,7 +168,8 @@ async function getVitaDexScreenerData() {
 let lastKnownPrice = null;
 let lastCheckedBlock = null;        // AUBRAI swap events
 let lastCLMintBurnBlock = null;     // AUBRAI mint/burn events
-let lastVitaCheckedBlock = null;    // VITA swap/mint/burn events
+const vitaPoolCursors = {};         // per-pool block cursors for Base VITA
+const ethVitaPoolCursors = {};      // per-pool block cursors for Ethereum
 
 function setLastKnownPrice(price) {
   lastKnownPrice = price;
@@ -216,20 +241,20 @@ function parseVitaSwapEvent(log, pool) {
   const amt0 = Number(ethers.formatUnits(amount0 < 0n ? -amount0 : amount0, 18));
   const amt1 = Number(ethers.formatUnits(amount1 < 0n ? -amount1 : amount1, 18));
 
-  let vitaAmount, bioAmount, direction;
+  let vitaAmount, counterAmount, direction;
   if (pool.vitaIsToken0) {
     vitaAmount = amt0;
-    bioAmount = amt1;
+    counterAmount = amt1;
     // negative amount0 = pool sends VITA out = someone bought VITA
-    direction = amount0 < 0n ? 'BIO → VITA' : 'VITA → BIO';
+    direction = amount0 < 0n ? 'bought' : 'sold';
   } else {
     vitaAmount = amt1;
-    bioAmount = amt0;
-    direction = amount1 < 0n ? 'BIO → VITA' : 'VITA → BIO';
+    counterAmount = amt0;
+    direction = amount1 < 0n ? 'bought' : 'sold';
   }
 
   return {
-    vitaAmount, bioAmount, direction,
+    vitaAmount, counterAmount, direction,
     txHash: log.transactionHash, blockNumber: log.blockNumber,
     poolAddress: pool.address,
   };
@@ -240,8 +265,8 @@ function parseVitaMintEvent(log, pool) {
   const { amount0, amount1 } = event.args;
   const amt0 = Number(ethers.formatUnits(amount0, 18));
   const amt1 = Number(ethers.formatUnits(amount1, 18));
-  const [vitaAmount, bioAmount] = pool.vitaIsToken0 ? [amt0, amt1] : [amt1, amt0];
-  return { vitaAmount, bioAmount, txHash: log.transactionHash, blockNumber: log.blockNumber, poolAddress: pool.address };
+  const [vitaAmount, counterAmount] = pool.vitaIsToken0 ? [amt0, amt1] : [amt1, amt0];
+  return { vitaAmount, counterAmount, txHash: log.transactionHash, blockNumber: log.blockNumber, poolAddress: pool.address };
 }
 
 function parseVitaBurnEvent(log, pool) {
@@ -249,8 +274,8 @@ function parseVitaBurnEvent(log, pool) {
   const { amount0, amount1 } = event.args;
   const amt0 = Number(ethers.formatUnits(amount0, 18));
   const amt1 = Number(ethers.formatUnits(amount1, 18));
-  const [vitaAmount, bioAmount] = pool.vitaIsToken0 ? [amt0, amt1] : [amt1, amt0];
-  return { vitaAmount, bioAmount, txHash: log.transactionHash, blockNumber: log.blockNumber, poolAddress: pool.address };
+  const [vitaAmount, counterAmount] = pool.vitaIsToken0 ? [amt0, amt1] : [amt1, amt0];
+  return { vitaAmount, counterAmount, txHash: log.transactionHash, blockNumber: log.blockNumber, poolAddress: pool.address };
 }
 
 // --- Polling functions ---
@@ -267,8 +292,9 @@ async function pollSwapEvents() {
   if (currentBlock <= lastCheckedBlock) return [];
 
   const swapTopicHash = poolContract.interface.getEvent('Swap').topicHash;
-  const allLogs = [];
+  const allSwaps = [];
   let from = lastCheckedBlock + 1;
+  let lastSuccessBlock = lastCheckedBlock;
 
   while (from <= currentBlock) {
     const to = Math.min(from + MAX_BLOCK_RANGE - 1, currentBlock);
@@ -279,15 +305,18 @@ async function pollSwapEvents() {
         fromBlock: from,
         toBlock: to,
       });
-      allLogs.push(...logs);
+      const parsed = logs.map(parseSwapEvent);
+      allSwaps.push(...parsed);
+      lastSuccessBlock = to;
     } catch (err) {
       console.error(`[swaps] getLogs failed for blocks ${from}-${to}: ${err.message}`);
+      break;
     }
     from = to + 1;
   }
 
-  lastCheckedBlock = currentBlock;
-  return allLogs.map(parseSwapEvent);
+  lastCheckedBlock = lastSuccessBlock;
+  return allSwaps;
 }
 
 async function pollCLMintBurnEvents() {
@@ -304,9 +333,10 @@ async function pollCLMintBurnEvents() {
   const mintTopic = poolContract.interface.getEvent('Mint').topicHash;
   const burnTopic = poolContract.interface.getEvent('Burn').topicHash;
 
-  const allMintLogs = [];
-  const allBurnLogs = [];
+  const allMints = [];
+  const allBurns = [];
   let from = lastCLMintBurnBlock + 1;
+  let lastSuccessBlock = lastCLMintBurnBlock;
 
   while (from <= currentBlock) {
     const to = Math.min(from + MAX_BLOCK_RANGE - 1, currentBlock);
@@ -317,21 +347,24 @@ async function pollCLMintBurnEvents() {
         fromBlock: from,
         toBlock: to,
       });
+      const chunkMints = [];
+      const chunkBurns = [];
       for (const log of logs) {
-        if (log.topics[0] === mintTopic) allMintLogs.push(log);
-        else allBurnLogs.push(log);
+        if (log.topics[0] === mintTopic) chunkMints.push(parseCLMintEvent(log));
+        else chunkBurns.push(parseCLBurnEvent(log));
       }
+      allMints.push(...chunkMints);
+      allBurns.push(...chunkBurns);
+      lastSuccessBlock = to;
     } catch (err) {
       console.error(`[cl-lp] getLogs failed for blocks ${from}-${to}: ${err.message}`);
+      break;
     }
     from = to + 1;
   }
 
-  lastCLMintBurnBlock = currentBlock;
-  return {
-    mints: allMintLogs.map(parseCLMintEvent),
-    burns: allBurnLogs.map(parseCLBurnEvent),
-  };
+  lastCLMintBurnBlock = lastSuccessBlock;
+  return { mints: allMints, burns: allBurns };
 }
 
 /**
@@ -341,12 +374,6 @@ async function pollVitaEvents() {
   if (vitaPools.length === 0) return { swaps: [], mints: [], burns: [] };
 
   const currentBlock = await provider.getBlockNumber();
-
-  if (lastVitaCheckedBlock === null) {
-    lastVitaCheckedBlock = currentBlock;
-    return { swaps: [], mints: [], burns: [] };
-  }
-  if (currentBlock <= lastVitaCheckedBlock) return { swaps: [], mints: [], burns: [] };
 
   // All VITA pools use the same CL ABI, so topic hashes are the same
   const swapTopic = vitaPools[0].contract.interface.getEvent('Swap').topicHash;
@@ -358,7 +385,17 @@ async function pollVitaEvents() {
   const allBurns = [];
 
   for (const pool of vitaPools) {
-    let from = lastVitaCheckedBlock + 1;
+    // Per-pool cursor: first call initializes, subsequent calls poll from last success
+    if (!(pool.address in vitaPoolCursors)) {
+      vitaPoolCursors[pool.address] = currentBlock;
+      continue;
+    }
+
+    const lastBlock = vitaPoolCursors[pool.address];
+    if (currentBlock <= lastBlock) continue;
+
+    let from = lastBlock + 1;
+    let lastSuccessBlock = lastBlock;
 
     while (from <= currentBlock) {
       const to = Math.min(from + MAX_BLOCK_RANGE - 1, currentBlock);
@@ -369,25 +406,113 @@ async function pollVitaEvents() {
           fromBlock: from,
           toBlock: to,
         });
+        const chunkSwaps = [], chunkMints = [], chunkBurns = [];
         for (const log of logs) {
-          if (log.topics[0] === swapTopic) allSwaps.push(parseVitaSwapEvent(log, pool));
-          else if (log.topics[0] === mintTopic) allMints.push(parseVitaMintEvent(log, pool));
-          else allBurns.push(parseVitaBurnEvent(log, pool));
+          if (log.topics[0] === swapTopic) chunkSwaps.push(parseVitaSwapEvent(log, pool));
+          else if (log.topics[0] === mintTopic) chunkMints.push(parseVitaMintEvent(log, pool));
+          else chunkBurns.push(parseVitaBurnEvent(log, pool));
         }
+        allSwaps.push(...chunkSwaps);
+        allMints.push(...chunkMints);
+        allBurns.push(...chunkBurns);
+        lastSuccessBlock = to;
       } catch (err) {
         console.error(`[vita] getLogs failed for ${pool.address} blocks ${from}-${to}: ${err.message}`);
+        break;
       }
       from = to + 1;
     }
+
+    vitaPoolCursors[pool.address] = lastSuccessBlock;
+  }
+  return { swaps: allSwaps, mints: allMints, burns: allBurns };
+}
+
+/**
+ * Poll for VITA Swap/Mint/Burn events across all Ethereum VITA pools (Uniswap v3).
+ */
+const ETH_MAX_BLOCK_RANGE = 10; // Alchemy free tier: same 10-block limit as Base
+
+async function pollEthVitaEvents() {
+  if (ethVitaPools.length === 0) return { swaps: [], mints: [], burns: [] };
+
+  const currentBlock = await ethProvider.getBlockNumber();
+
+  const swapTopic = ethVitaPools[0].contract.interface.getEvent('Swap').topicHash;
+  const mintTopic = ethVitaPools[0].contract.interface.getEvent('Mint').topicHash;
+  const burnTopic = ethVitaPools[0].contract.interface.getEvent('Burn').topicHash;
+
+  const allSwaps = [];
+  const allMints = [];
+  const allBurns = [];
+
+  for (const pool of ethVitaPools) {
+    // Per-pool cursor: first call initializes, subsequent calls poll from last success
+    if (!(pool.address in ethVitaPoolCursors)) {
+      ethVitaPoolCursors[pool.address] = currentBlock;
+      continue;
+    }
+
+    const lastBlock = ethVitaPoolCursors[pool.address];
+    if (currentBlock <= lastBlock) continue;
+
+    let from = lastBlock + 1;
+    let lastSuccessBlock = lastBlock;
+
+    while (from <= currentBlock) {
+      const to = Math.min(from + ETH_MAX_BLOCK_RANGE - 1, currentBlock);
+      try {
+        const logs = await ethProvider.getLogs({
+          address: pool.address,
+          topics: [[swapTopic, mintTopic, burnTopic]],
+          fromBlock: from,
+          toBlock: to,
+        });
+        const chunkSwaps = [], chunkMints = [], chunkBurns = [];
+        for (const log of logs) {
+          if (log.topics[0] === swapTopic) chunkSwaps.push(parseVitaSwapEvent(log, pool));
+          else if (log.topics[0] === mintTopic) chunkMints.push(parseVitaMintEvent(log, pool));
+          else chunkBurns.push(parseVitaBurnEvent(log, pool));
+        }
+        allSwaps.push(...chunkSwaps);
+        allMints.push(...chunkMints);
+        allBurns.push(...chunkBurns);
+        lastSuccessBlock = to;
+      } catch (err) {
+        console.error(`[eth-vita] getLogs failed for ${pool.address} blocks ${from}-${to}: ${err.message}`);
+        break;
+      }
+      from = to + 1;
+    }
+
+    ethVitaPoolCursors[pool.address] = lastSuccessBlock;
   }
 
-  lastVitaCheckedBlock = currentBlock;
   return { swaps: allSwaps, mints: allMints, burns: allBurns };
+}
+
+/**
+ * Fetch Ethereum VITA USD price from DexScreener.
+ */
+async function getEthVitaDexScreenerData() {
+  try {
+    const res = await fetch(config.ethereumVitaPools[0].dexscreenerApiUrl);
+    if (!res.ok) return null;
+    const data = await res.json();
+    const pair = data.pairs?.[0];
+    if (!pair) return null;
+    return {
+      priceUsd: parseFloat(pair.priceUsd) || null,
+    };
+  } catch {
+    return null;
+  }
 }
 
 module.exports = {
   init, getPoolState, priceFromSqrtX96,
   getDexScreenerPrice, getDexScreenerData, getVitaDexScreenerData,
+  getEthVitaDexScreenerData,
   setLastKnownPrice, pollSwapEvents,
-  pollCLMintBurnEvents, pollVitaEvents,
+  pollCLMintBurnEvents, pollVitaEvents, pollEthVitaEvents,
 };

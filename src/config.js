@@ -3,6 +3,7 @@ require('dotenv').config();
 const config = {
   // RPC
   rpcUrl: process.env.RPC_URL || 'https://mainnet.base.org',
+  ethereumRpcUrl: process.env.ETHEREUM_RPC_URL || 'https://eth.llamarpc.com',
 
   // Telegram
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN,
@@ -30,6 +31,11 @@ const config = {
     decimals: 18,
     symbol: 'VITA',
   },
+  vitaEthereum: {
+    address: '0x81f8f0bb1cb2a06649e51913a151f0e7ef6fa321',
+    decimals: 18,
+    symbol: 'VITA',
+  },
 
   // VITA/BIO V2 CPMM pools on Aerodrome
   vitaPools: [
@@ -42,6 +48,25 @@ const config = {
       address: '0xa81b95635682295cbd25129199420ae195dcef89',
       dexscreenerUrl: 'https://dexscreener.com/base/0xa81b95635682295cbd25129199420ae195dcef89',
       dexscreenerApiUrl: 'https://api.dexscreener.com/latest/dex/pairs/base/0xa81b95635682295cbd25129199420ae195dcef89',
+    },
+  ],
+
+  // Ethereum VITA pools (Uniswap v3)
+  ethereumVitaPools: [
+    {
+      address: '0x2DC8FbaFc10da100F2f12807b93CBb3E5Ff7e6b0',
+      name: 'VITA/BIO',
+      dexscreenerApiUrl: 'https://api.dexscreener.com/latest/dex/pairs/ethereum/0x2DC8FbaFc10da100F2f12807b93CBb3E5Ff7e6b0',
+    },
+    {
+      address: '0xa28b1854a654e35e94d51eA2F4F34208D9BA79A2',
+      name: 'VITARNA/VITA #1',
+      dexscreenerApiUrl: 'https://api.dexscreener.com/latest/dex/pairs/ethereum/0xa28b1854a654e35e94d51eA2F4F34208D9BA79A2',
+    },
+    {
+      address: '0x6aeB5A2974902717ee01d33B6F999eDBc4Ab4C7a',
+      name: 'VITARNA/VITA #2',
+      dexscreenerApiUrl: 'https://api.dexscreener.com/latest/dex/pairs/ethereum/0x6aeB5A2974902717ee01d33B6F999eDBc4Ab4C7a',
     },
   ],
 

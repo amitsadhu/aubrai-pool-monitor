@@ -1,8 +1,8 @@
 const config = require('./config');
-const { init, getPoolState, setLastKnownPrice, pollSwapEvents, pollCLMintBurnEvents, pollVitaEvents } = require('./pool');
+const { init, getPoolState, setLastKnownPrice, pollSwapEvents, pollCLMintBurnEvents, pollVitaEvents, pollEthVitaEvents } = require('./pool');
 const { checkAllHealth, checkSwapSlippage } = require('./checks');
 const { sendTelegramAlert, sendSwapAlert, sendAdminAlert, sendAdminDM, sendDailyStatus, sendDailyStats } = require('./alerts');
-const { recordAubraiSwap, recordAubraiMint, recordAubraiBurn, recordVitaSwap, recordVitaMint, recordVitaBurn, snapshotAndReset } = require('./stats');
+const { recordAubraiSwap, recordAubraiMint, recordAubraiBurn, recordVitaSwap, recordVitaMint, recordVitaBurn, recordEthVitaSwap, recordEthVitaMint, recordEthVitaBurn, snapshotAndReset } = require('./stats');
 
 function fmt(n, digits = 2) {
   return Number(n).toLocaleString('en-US', { maximumFractionDigits: digits });
@@ -10,8 +10,11 @@ function fmt(n, digits = 2) {
 
 let previousState = null;
 let pollTimer = null;
+let polling = false;
 
 async function poll() {
+  if (polling) return;
+  polling = true;
   try {
     // Check for new AUBRAI swaps since last poll
     try {
@@ -49,19 +52,38 @@ async function poll() {
     try {
       const { swaps: vitaSwaps, mints: vitaMints, burns: vitaBurns } = await pollVitaEvents();
       for (const swap of vitaSwaps) {
-        console.log(`[vita-swap] ${swap.direction} | ${fmt(swap.vitaAmount)} VITA / ${fmt(swap.bioAmount)} BIO | tx: ${swap.txHash}`);
+        console.log(`[vita-swap] VITA ${swap.direction} | ${fmt(swap.vitaAmount)} VITA / ${fmt(swap.counterAmount)} BIO | tx: ${swap.txHash}`);
         recordVitaSwap(swap);
       }
       for (const mint of vitaMints) {
-        console.log(`[vita-lp] Mint | ${fmt(mint.vitaAmount)} VITA + ${fmt(mint.bioAmount)} BIO | tx: ${mint.txHash}`);
+        console.log(`[vita-lp] Mint | ${fmt(mint.vitaAmount)} VITA + ${fmt(mint.counterAmount)} BIO | tx: ${mint.txHash}`);
         recordVitaMint(mint);
       }
       for (const burn of vitaBurns) {
-        console.log(`[vita-lp] Burn | ${fmt(burn.vitaAmount)} VITA + ${fmt(burn.bioAmount)} BIO | tx: ${burn.txHash}`);
+        console.log(`[vita-lp] Burn | ${fmt(burn.vitaAmount)} VITA + ${fmt(burn.counterAmount)} BIO | tx: ${burn.txHash}`);
         recordVitaBurn(burn);
       }
     } catch (err) {
       console.warn('[vita] VITA CL polling failed:', err.message);
+    }
+
+    // Poll Ethereum VITA events
+    try {
+      const { swaps: ethVitaSwaps, mints: ethVitaMints, burns: ethVitaBurns } = await pollEthVitaEvents();
+      for (const swap of ethVitaSwaps) {
+        console.log(`[eth-vita-swap] ${swap.direction} | ${fmt(swap.vitaAmount)} VITA | tx: ${swap.txHash}`);
+        recordEthVitaSwap(swap);
+      }
+      for (const mint of ethVitaMints) {
+        console.log(`[eth-vita-lp] Mint | ${fmt(mint.vitaAmount)} VITA | tx: ${mint.txHash}`);
+        recordEthVitaMint(mint);
+      }
+      for (const burn of ethVitaBurns) {
+        console.log(`[eth-vita-lp] Burn | ${fmt(burn.vitaAmount)} VITA | tx: ${burn.txHash}`);
+        recordEthVitaBurn(burn);
+      }
+    } catch (err) {
+      console.warn('[eth-vita] Ethereum VITA polling failed:', err.message);
     }
 
     // Fetch pool state and run health checks
@@ -86,6 +108,8 @@ async function poll() {
   } catch (err) {
     console.error('[error] Poll failed:', err.message);
     await sendAdminAlert(`Poll failed: ${err.message}`);
+  } finally {
+    polling = false;
   }
 }
 
@@ -93,7 +117,10 @@ async function start() {
   console.log('AUBRAI/BIO + VITA/BIO Pool Health Monitor');
   console.log(`AUBRAI/BIO CL Pool: ${config.poolAddress}`);
   for (const p of config.vitaPools) {
-    console.log(`VITA/BIO CL Pool: ${p.address}`);
+    console.log(`VITA/BIO CL Pool (Base): ${p.address}`);
+  }
+  for (const p of config.ethereumVitaPools) {
+    console.log(`${p.name} Pool (Ethereum): ${p.address}`);
   }
   console.log(`Polling every ${config.pollIntervalMs / 1000}s | Swap slippage threshold: ${config.swapSlippageThreshold}%`);
   console.log(`Telegram alerts: ${config.telegramBotToken && config.telegramChatId ? 'enabled' : 'disabled (missing bot token or chat ID)'}`);

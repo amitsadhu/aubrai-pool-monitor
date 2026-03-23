@@ -1,5 +1,5 @@
 const config = require('./config');
-const { getDexScreenerData, getVitaDexScreenerData } = require('./pool');
+const { getDexScreenerData, getVitaDexScreenerData, getEthVitaDexScreenerData } = require('./pool');
 
 // Track last alert time per check type for cooldown
 const lastAlertTimes = {};
@@ -330,9 +330,9 @@ async function sendDailyStats(snapshot) {
     aubraiLines.push(`No swaps`);
   } else {
     aubraiLines.push(`\u{1F7E2} Bought: ${escTg(fmt(a.swaps.bought.tokens))} AUBRAI${$(a.swaps.bought.tokens, aubraiUsd)}`);
-    aubraiLines.push(`   ${escTg(fmt(a.swaps.bought.bio))} BIO spent`);
+    aubraiLines.push(`   ${escTg(fmt(a.swaps.bought.counter))} BIO spent`);
     aubraiLines.push(`\u{1F534} Sold: ${escTg(fmt(a.swaps.sold.tokens))} AUBRAI${$(a.swaps.sold.tokens, aubraiUsd)}`);
-    aubraiLines.push(`   ${escTg(fmt(a.swaps.sold.bio))} BIO received`);
+    aubraiLines.push(`   ${escTg(fmt(a.swaps.sold.counter))} BIO received`);
   }
   aubraiLines.push('');
   aubraiLines.push(`*Liquidity* \\(${escTg(a.lp.mintCount)} adds, ${escTg(a.lp.burnCount)} removes\\)`);
@@ -340,10 +340,10 @@ async function sendDailyStats(snapshot) {
     aubraiLines.push(`No LP changes`);
   } else {
     if (a.lp.mintCount > 0) {
-      aubraiLines.push(`\u2795 Added: ${escTg(fmt(a.lp.added.tokens))} AUBRAI${$(a.lp.added.tokens, aubraiUsd)} \\+ ${escTg(fmt(a.lp.added.bio))} BIO${$(a.lp.added.bio, bioUsd)}`);
+      aubraiLines.push(`\u2795 Added: ${escTg(fmt(a.lp.added.tokens))} AUBRAI${$(a.lp.added.tokens, aubraiUsd)} \\+ ${escTg(fmt(a.lp.added.counter))} BIO${$(a.lp.added.counter, bioUsd)}`);
     }
     if (a.lp.burnCount > 0) {
-      aubraiLines.push(`\u2796 Removed: ${escTg(fmt(a.lp.withdrawn.tokens))} AUBRAI${$(a.lp.withdrawn.tokens, aubraiUsd)} \\+ ${escTg(fmt(a.lp.withdrawn.bio))} BIO${$(a.lp.withdrawn.bio, bioUsd)}`);
+      aubraiLines.push(`\u2796 Removed: ${escTg(fmt(a.lp.withdrawn.tokens))} AUBRAI${$(a.lp.withdrawn.tokens, aubraiUsd)} \\+ ${escTg(fmt(a.lp.withdrawn.counter))} BIO${$(a.lp.withdrawn.counter, bioUsd)}`);
     }
   }
   aubraiLines.push('');
@@ -361,9 +361,9 @@ async function sendDailyStats(snapshot) {
     vitaLines.push(`No swaps`);
   } else {
     vitaLines.push(`\u{1F7E2} Bought: ${escTg(fmt(v.swaps.bought.tokens))} VITA${$(v.swaps.bought.tokens, vitaUsd)}`);
-    vitaLines.push(`   ${escTg(fmt(v.swaps.bought.bio))} BIO spent`);
+    vitaLines.push(`   ${escTg(fmt(v.swaps.bought.counter))} BIO spent`);
     vitaLines.push(`\u{1F534} Sold: ${escTg(fmt(v.swaps.sold.tokens))} VITA${$(v.swaps.sold.tokens, vitaUsd)}`);
-    vitaLines.push(`   ${escTg(fmt(v.swaps.sold.bio))} BIO received`);
+    vitaLines.push(`   ${escTg(fmt(v.swaps.sold.counter))} BIO received`);
   }
   vitaLines.push('');
   vitaLines.push(`*Liquidity* \\(${escTg(v.lp.mintCount)} adds, ${escTg(v.lp.burnCount)} removes\\)`);
@@ -371,19 +371,51 @@ async function sendDailyStats(snapshot) {
     vitaLines.push(`No LP changes`);
   } else {
     if (v.lp.mintCount > 0) {
-      vitaLines.push(`\u2795 Added: ${escTg(fmt(v.lp.added.tokens))} VITA${$(v.lp.added.tokens, vitaUsd)} \\+ ${escTg(fmt(v.lp.added.bio))} BIO${$(v.lp.added.bio, bioUsd)}`);
+      vitaLines.push(`\u2795 Added: ${escTg(fmt(v.lp.added.tokens))} VITA${$(v.lp.added.tokens, vitaUsd)} \\+ ${escTg(fmt(v.lp.added.counter))} BIO${$(v.lp.added.counter, bioUsd)}`);
     }
     if (v.lp.burnCount > 0) {
-      vitaLines.push(`\u2796 Removed: ${escTg(fmt(v.lp.withdrawn.tokens))} VITA${$(v.lp.withdrawn.tokens, vitaUsd)} \\+ ${escTg(fmt(v.lp.withdrawn.bio))} BIO${$(v.lp.withdrawn.bio, bioUsd)}`);
+      vitaLines.push(`\u2796 Removed: ${escTg(fmt(v.lp.withdrawn.tokens))} VITA${$(v.lp.withdrawn.tokens, vitaUsd)} \\+ ${escTg(fmt(v.lp.withdrawn.counter))} BIO${$(v.lp.withdrawn.counter, bioUsd)}`);
     }
   }
   vitaLines.push('');
   vitaLines.push(`VITA $${escTg(fmt(vitaUsd || 0, 4))} \\| BIO $${escTg(fmt(bioUsd || 0, 4))}`);
 
+  // --- Ethereum VITA message ---
+  const ethVitaDex = await getEthVitaDexScreenerData();
+  const ethVitaUsd = ethVitaDex?.priceUsd || vitaUsd; // fallback to Base VITA price
+
+  const ev = snapshot.vitaEthereum;
+  const ethVitaLines = [
+    `\u{1F7E0} *VITA \\| Daily Stats* \\(${escTg(windowHours)}h\\) — *Ethereum*`,
+    `_Uniswap v3 \\(3 pools\\)_`,
+    '',
+    `*Swaps* \\(${escTg(ev.swaps.count)}\\)`,
+  ];
+  if (ev.swaps.count === 0) {
+    ethVitaLines.push(`No swaps`);
+  } else {
+    ethVitaLines.push(`\u{1F7E2} Bought: ${escTg(fmt(ev.swaps.bought.tokens))} VITA${$(ev.swaps.bought.tokens, ethVitaUsd)}`);
+    ethVitaLines.push(`\u{1F534} Sold: ${escTg(fmt(ev.swaps.sold.tokens))} VITA${$(ev.swaps.sold.tokens, ethVitaUsd)}`);
+  }
+  ethVitaLines.push('');
+  ethVitaLines.push(`*Liquidity* \\(${escTg(ev.lp.mintCount)} adds, ${escTg(ev.lp.burnCount)} removes\\)`);
+  if (ev.lp.mintCount + ev.lp.burnCount === 0) {
+    ethVitaLines.push(`No LP changes`);
+  } else {
+    if (ev.lp.mintCount > 0) {
+      ethVitaLines.push(`\u2795 Added: ${escTg(fmt(ev.lp.added.tokens))} VITA${$(ev.lp.added.tokens, ethVitaUsd)}`);
+    }
+    if (ev.lp.burnCount > 0) {
+      ethVitaLines.push(`\u2796 Removed: ${escTg(fmt(ev.lp.withdrawn.tokens))} VITA${$(ev.lp.withdrawn.tokens, ethVitaUsd)}`);
+    }
+  }
+  ethVitaLines.push('');
+  ethVitaLines.push(`VITA $${escTg(fmt(ethVitaUsd || 0, 4))}`);
+
   // --- Send stats messages ---
   const url = `https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`;
 
-  for (const [label, messageText] of [['AUBRAI', aubraiLines.join('\n')], ['VITA', vitaLines.join('\n')]]) {
+  for (const [label, messageText] of [['AUBRAI', aubraiLines.join('\n')], ['VITA (Base)', vitaLines.join('\n')], ['VITA (Ethereum)', ethVitaLines.join('\n')]]) {
     try {
       const res = await fetch(url, {
         method: 'POST',
