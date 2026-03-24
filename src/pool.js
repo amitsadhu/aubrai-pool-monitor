@@ -1,5 +1,6 @@
 const { ethers } = require('ethers');
 const config = require('./config');
+const { loadCursorsFromDisk, registerCursorGetter } = require('./stats');
 
 const CL_POOL_ABI = [
   'function slot0() view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, bool unlocked)',
@@ -67,6 +68,19 @@ async function init() {
   } catch (err) {
     console.warn('[init] Failed to initialize Ethereum pools:', err.message);
   }
+
+  // Load persisted block cursors (so we don't skip events after restart)
+  const savedCursors = loadCursorsFromDisk();
+  if (savedCursors) {
+    if (savedCursors.lastCheckedBlock) lastCheckedBlock = savedCursors.lastCheckedBlock;
+    if (savedCursors.lastCLMintBurnBlock) lastCLMintBurnBlock = savedCursors.lastCLMintBurnBlock;
+    if (savedCursors.vitaPoolCursors) Object.assign(vitaPoolCursors, savedCursors.vitaPoolCursors);
+    if (savedCursors.ethVitaPoolCursors) Object.assign(ethVitaPoolCursors, savedCursors.ethVitaPoolCursors);
+    console.log(`[init] Restored block cursors — AUBRAI swap: ${lastCheckedBlock}, AUBRAI LP: ${lastCLMintBurnBlock}`);
+  }
+
+  // Register cursor getter so stats.js saves cursors atomically with stats
+  registerCursorGetter(getCursors);
 }
 
 /**
@@ -123,6 +137,7 @@ async function getPoolState() {
 
 /**
  * Fetch price from DexScreener API for AUBRAI.
+ * Verifies the returned pair matches our pool address.
  */
 async function getDexScreenerData() {
   try {
@@ -131,6 +146,11 @@ async function getDexScreenerData() {
     const data = await res.json();
     const pair = data.pairs?.[0];
     if (!pair) return null;
+    // Verify pair matches our pool
+    if (pair.pairAddress && pair.pairAddress.toLowerCase() !== config.poolAddress.toLowerCase()) {
+      console.warn(`[dex] DexScreener pair mismatch: expected ${config.poolAddress}, got ${pair.pairAddress}`);
+      return null;
+    }
     return {
       priceNative: parseFloat(pair.priceNative),
       priceUsd: parseFloat(pair.priceUsd) || null,
@@ -147,6 +167,7 @@ async function getDexScreenerPrice() {
 
 /**
  * Fetch VITA USD price from DexScreener.
+ * Checks base/quote ordering to ensure we return VITA's price, not counter token's.
  */
 async function getVitaDexScreenerData() {
   try {
@@ -155,9 +176,27 @@ async function getVitaDexScreenerData() {
     const data = await res.json();
     const pair = data.pairs?.[0];
     if (!pair) return null;
+    // Verify pair matches our pool
+    if (pair.pairAddress && pair.pairAddress.toLowerCase() !== config.vitaPools[0].address.toLowerCase()) {
+      console.warn(`[dex] DexScreener VITA pair mismatch: expected ${config.vitaPools[0].address}, got ${pair.pairAddress}`);
+      return null;
+    }
+    const vitaAddr = config.vita.address.toLowerCase();
+    const basePriceUsd = parseFloat(pair.priceUsd);
+    if (!basePriceUsd) return null;
+    // If VITA is the base token, priceUsd is VITA's price
+    if (pair.baseToken?.address?.toLowerCase() === vitaAddr) {
+      return {
+        priceNative: parseFloat(pair.priceNative),
+        priceUsd: basePriceUsd,
+      };
+    }
+    // VITA is the quote token — compute: VITA_USD = base_USD / priceNative
+    const priceNative = parseFloat(pair.priceNative);
+    if (!priceNative) return null;
     return {
-      priceNative: parseFloat(pair.priceNative),
-      priceUsd: parseFloat(pair.priceUsd) || null,
+      priceNative: 1 / priceNative,
+      priceUsd: basePriceUsd / priceNative,
     };
   } catch {
     return null;
@@ -501,12 +540,34 @@ async function getEthVitaDexScreenerData() {
     const data = await res.json();
     const pair = data.pairs?.[0];
     if (!pair) return null;
-    return {
-      priceUsd: parseFloat(pair.priceUsd) || null,
-    };
+    // Verify pair matches our pool
+    if (pair.pairAddress && pair.pairAddress.toLowerCase() !== config.ethereumVitaPools[0].address.toLowerCase()) {
+      console.warn(`[dex] DexScreener ETH VITA pair mismatch: expected ${config.ethereumVitaPools[0].address}, got ${pair.pairAddress}`);
+      return null;
+    }
+    const vitaAddr = config.vitaEthereum.address.toLowerCase();
+    const basePriceUsd = parseFloat(pair.priceUsd);
+    if (!basePriceUsd) return null;
+    // If VITA is the base token, priceUsd is already VITA's price
+    // If VITA is the quote token, compute: VITA_USD = base_USD / priceNative
+    if (pair.baseToken?.address?.toLowerCase() === vitaAddr) {
+      return { priceUsd: basePriceUsd };
+    }
+    const priceNative = parseFloat(pair.priceNative);
+    if (!priceNative) return null;
+    return { priceUsd: basePriceUsd / priceNative };
   } catch {
     return null;
   }
+}
+
+function getCursors() {
+  return {
+    lastCheckedBlock,
+    lastCLMintBurnBlock,
+    vitaPoolCursors: { ...vitaPoolCursors },
+    ethVitaPoolCursors: { ...ethVitaPoolCursors },
+  };
 }
 
 module.exports = {
@@ -515,4 +576,5 @@ module.exports = {
   getEthVitaDexScreenerData,
   setLastKnownPrice, pollSwapEvents,
   pollCLMintBurnEvents, pollVitaEvents, pollEthVitaEvents,
+  getCursors,
 };

@@ -2,7 +2,7 @@ const config = require('./config');
 const { init, getPoolState, setLastKnownPrice, pollSwapEvents, pollCLMintBurnEvents, pollVitaEvents, pollEthVitaEvents } = require('./pool');
 const { checkAllHealth, checkSwapSlippage } = require('./checks');
 const { sendTelegramAlert, sendSwapAlert, sendAdminAlert, sendAdminDM, sendDailyStatus, sendDailyStats } = require('./alerts');
-const { recordAubraiSwap, recordAubraiMint, recordAubraiBurn, recordVitaSwap, recordVitaMint, recordVitaBurn, recordEthVitaSwap, recordEthVitaMint, recordEthVitaBurn, snapshotAndReset } = require('./stats');
+const { recordAubraiSwap, recordAubraiMint, recordAubraiBurn, recordVitaSwap, recordVitaMint, recordVitaBurn, recordEthVitaSwap, recordEthVitaMint, recordEthVitaBurn, snapshotAndReset, saveToDisk } = require('./stats');
 
 function fmt(n, digits = 2) {
   return Number(n).toLocaleString('en-US', { maximumFractionDigits: digits });
@@ -11,6 +11,7 @@ function fmt(n, digits = 2) {
 let previousState = null;
 let pollTimer = null;
 let polling = false;
+let dailyReportDue = false;
 
 async function poll() {
   if (polling) return;
@@ -86,6 +87,9 @@ async function poll() {
       console.warn('[eth-vita] Ethereum VITA polling failed:', err.message);
     }
 
+    // Save stats + cursors atomically after all events are recorded
+    saveToDisk();
+
     // Fetch pool state and run health checks
     const state = await getPoolState();
     setLastKnownPrice(state.spotPrice);
@@ -105,6 +109,18 @@ async function poll() {
     }
 
     previousState = state;
+
+    // Daily report — triggered by timer flag, executed here so it never races with event recording
+    if (dailyReportDue) {
+      dailyReportDue = false;
+      try {
+        const snapshot = snapshotAndReset();
+        await sendDailyStatus(state);
+        await sendDailyStats(snapshot);
+      } catch (err) {
+        console.error('[daily] Failed to send daily report:', err.message);
+      }
+    }
   } catch (err) {
     console.error('[error] Poll failed:', err.message);
     await sendAdminAlert(`Poll failed: ${err.message}`);
@@ -135,47 +151,48 @@ async function start() {
   await poll();
   pollTimer = setInterval(poll, config.pollIntervalMs);
 
-  // Schedule daily status at 9:00 CET (8:00 UTC)
-  scheduleDailyStatus();
+  // Schedule daily report at 9:00 CET/CEST
+  scheduleDailyReport();
 }
 
 let dailyTimer = null;
 
-function scheduleDailyStatus() {
-  const DAILY_HOUR_UTC = 8; // 9:00 CET = 8:00 UTC
-
-  function msUntilNextRun() {
-    const now = new Date();
-    const next = new Date(now);
-    next.setUTCHours(DAILY_HOUR_UTC, 0, 0, 0);
-    if (next <= now) next.setUTCDate(next.getUTCDate() + 1);
-    return next - now;
+/**
+ * Compute ms until next 9:00 in Europe/Berlin (CET/CEST).
+ * Uses Intl to get the correct UTC offset regardless of DST.
+ */
+function msUntilNext9CET() {
+  const now = new Date();
+  // Get Berlin's current UTC offset in hours
+  const berlinNow = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Berlin' }));
+  const offsetMs = berlinNow.getTime() - now.getTime();
+  // Target: 9:00 Berlin time today, converted to UTC
+  const target = new Date(berlinNow);
+  target.setHours(9, 0, 0, 0);
+  let targetUtc = new Date(target.getTime() - offsetMs);
+  if (targetUtc <= now) {
+    // Tomorrow — recompute offset (could cross DST boundary, though 9 AM is far from the 2-3 AM transition)
+    targetUtc.setDate(targetUtc.getDate() + 1);
+    const tomorrowBerlin = new Date(targetUtc.toLocaleString('en-US', { timeZone: 'Europe/Berlin' }));
+    const tomorrowOffsetMs = tomorrowBerlin.getTime() - targetUtc.getTime();
+    const tomorrowTarget = new Date(tomorrowBerlin);
+    tomorrowTarget.setHours(9, 0, 0, 0);
+    targetUtc = new Date(tomorrowTarget.getTime() - tomorrowOffsetMs);
   }
+  return targetUtc - now;
+}
 
-  function run() {
-    // Send daily health status
-    getPoolState().then((state) => {
-      sendDailyStatus(state);
-    }).catch((err) => {
-      console.error('[daily] Failed to send daily status:', err.message);
-    });
-
-    // Send daily swap/LP stats (snapshot and reset accumulator)
-    try {
-      const snapshot = snapshotAndReset();
-      sendDailyStats(snapshot).catch((err) => {
-        console.error('[daily] Failed to send daily stats:', err.message);
-      });
-    } catch (err) {
-      console.error('[daily] Failed to snapshot stats:', err.message);
-    }
-
-    dailyTimer = setTimeout(run, msUntilNextRun());
+function scheduleDailyReport() {
+  function schedule() {
+    dailyTimer = setTimeout(() => {
+      dailyReportDue = true;
+      console.log('[daily] Daily report flag set — will execute after current poll cycle');
+      schedule();
+    }, msUntilNext9CET());
   }
-
-  dailyTimer = setTimeout(run, msUntilNextRun());
-  const hours = Math.round(msUntilNextRun() / 3600000 * 10) / 10;
-  console.log(`[daily] Next status report in ${hours}h (9:00 CET)`);
+  schedule();
+  const hours = Math.round(msUntilNext9CET() / 3600000 * 10) / 10;
+  console.log(`[daily] Next status report in ${hours}h (9:00 CET/CEST)`);
 }
 
 // Graceful shutdown

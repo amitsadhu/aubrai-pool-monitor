@@ -8,6 +8,7 @@ const path = require('path');
 
 const STATS_DIR = process.env.STATS_PATH || '/data';
 const STATS_FILE = path.join(STATS_DIR, 'stats.json');
+const CURSORS_FILE = path.join(STATS_DIR, 'cursors.json');
 
 function createTokenStats() {
   return {
@@ -84,20 +85,34 @@ function saveToDisk() {
   try {
     if (!fs.existsSync(STATS_DIR)) return; // volume not mounted (local dev)
     fs.writeFileSync(STATS_FILE, JSON.stringify(stats), 'utf8');
+    // Save cursors atomically alongside stats so they're always in sync
+    if (_getCursors) {
+      fs.writeFileSync(CURSORS_FILE, JSON.stringify(_getCursors()), 'utf8');
+    }
   } catch (err) {
-    console.warn('[stats] Failed to save stats to disk:', err.message);
+    console.warn('[stats] Failed to save stats/cursors to disk:', err.message);
   }
 }
 
-function deleteFromDisk() {
+// --- Cursor persistence (separate from stats — cursors must survive daily snapshot) ---
+
+let _getCursors = null; // registered by pool.js to avoid circular dep
+
+function registerCursorGetter(fn) {
+  _getCursors = fn;
+}
+
+function loadCursorsFromDisk() {
   try {
-    if (fs.existsSync(STATS_FILE)) {
-      fs.unlinkSync(STATS_FILE);
-      console.log('[stats] Deleted stats file after snapshot');
+    if (fs.existsSync(CURSORS_FILE)) {
+      const data = JSON.parse(fs.readFileSync(CURSORS_FILE, 'utf8'));
+      console.log('[stats] Loaded cursors from disk');
+      return data;
     }
   } catch (err) {
-    console.warn('[stats] Failed to delete stats file:', err.message);
+    console.warn('[stats] Failed to load cursors from disk:', err.message);
   }
+  return null;
 }
 
 // Load on startup
@@ -114,21 +129,18 @@ function recordAubraiSwap(swap) {
     stats.aubrai.swaps.sold.tokens += swap.aubraiAmount;
     stats.aubrai.swaps.sold.counter += swap.bioAmount;
   }
-  saveToDisk();
 }
 
 function recordAubraiMint(mint) {
   stats.aubrai.lp.mintCount++;
   stats.aubrai.lp.added.tokens += mint.aubraiAmount;
   stats.aubrai.lp.added.counter += mint.bioAmount;
-  saveToDisk();
 }
 
 function recordAubraiBurn(burn) {
   stats.aubrai.lp.burnCount++;
   stats.aubrai.lp.withdrawn.tokens += burn.aubraiAmount;
   stats.aubrai.lp.withdrawn.counter += burn.bioAmount;
-  saveToDisk();
 }
 
 // --- VITA ---
@@ -142,21 +154,18 @@ function recordVitaSwap(swap) {
     stats.vita.swaps.sold.tokens += swap.vitaAmount;
     stats.vita.swaps.sold.counter += swap.counterAmount;
   }
-  saveToDisk();
 }
 
 function recordVitaMint(mint) {
   stats.vita.lp.mintCount++;
   stats.vita.lp.added.tokens += mint.vitaAmount;
   stats.vita.lp.added.counter += mint.counterAmount;
-  saveToDisk();
 }
 
 function recordVitaBurn(burn) {
   stats.vita.lp.burnCount++;
   stats.vita.lp.withdrawn.tokens += burn.vitaAmount;
   stats.vita.lp.withdrawn.counter += burn.counterAmount;
-  saveToDisk();
 }
 
 // --- VITA (Ethereum) ---
@@ -170,21 +179,18 @@ function recordEthVitaSwap(swap) {
     stats.vitaEthereum.swaps.sold.tokens += swap.vitaAmount;
     stats.vitaEthereum.swaps.sold.counter += swap.counterAmount;
   }
-  saveToDisk();
 }
 
 function recordEthVitaMint(mint) {
   stats.vitaEthereum.lp.mintCount++;
   stats.vitaEthereum.lp.added.tokens += mint.vitaAmount;
   stats.vitaEthereum.lp.added.counter += mint.counterAmount;
-  saveToDisk();
 }
 
 function recordEthVitaBurn(burn) {
   stats.vitaEthereum.lp.burnCount++;
   stats.vitaEthereum.lp.withdrawn.tokens += burn.vitaAmount;
   stats.vitaEthereum.lp.withdrawn.counter += burn.counterAmount;
-  saveToDisk();
 }
 
 // --- Snapshot ---
@@ -198,7 +204,7 @@ function snapshotAndReset() {
     vitaEthereum: createTokenStats(),
     periodStart: Date.now(),
   };
-  deleteFromDisk();
+  saveToDisk(); // overwrite with fresh empty stats (don't delete — Telegram send may fail)
   return snapshot;
 }
 
@@ -206,5 +212,6 @@ module.exports = {
   recordAubraiSwap, recordAubraiMint, recordAubraiBurn,
   recordVitaSwap, recordVitaMint, recordVitaBurn,
   recordEthVitaSwap, recordEthVitaMint, recordEthVitaBurn,
-  snapshotAndReset,
+  snapshotAndReset, saveToDisk,
+  registerCursorGetter, loadCursorsFromDisk,
 };

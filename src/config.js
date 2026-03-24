@@ -37,7 +37,7 @@ const config = {
     symbol: 'VITA',
   },
 
-  // VITA/BIO V2 CPMM pools on Aerodrome
+  // VITA/BIO CL pools on Aerodrome (SlipStream)
   vitaPools: [
     {
       address: '0x5bd27255061a0e8bce2fc32bbb50d3be4e0b28bd',
