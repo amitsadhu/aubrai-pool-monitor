@@ -143,54 +143,29 @@ function recordAubraiBurn(burn) {
   stats.aubrai.lp.withdrawn.counter += burn.bioAmount;
 }
 
-// --- VITA ---
+// --- VITA (generic, keyed by statsKey) ---
 
-function recordVitaSwap(swap) {
-  stats.vita.swaps.count++;
+function recordVitaSwap(statsKey, swap) {
+  stats[statsKey].swaps.count++;
   if (swap.direction === 'bought') {
-    stats.vita.swaps.bought.tokens += swap.vitaAmount;
-    stats.vita.swaps.bought.counter += swap.counterAmount;
+    stats[statsKey].swaps.bought.tokens += swap.vitaAmount;
+    stats[statsKey].swaps.bought.counter += swap.counterAmount;
   } else {
-    stats.vita.swaps.sold.tokens += swap.vitaAmount;
-    stats.vita.swaps.sold.counter += swap.counterAmount;
+    stats[statsKey].swaps.sold.tokens += swap.vitaAmount;
+    stats[statsKey].swaps.sold.counter += swap.counterAmount;
   }
 }
 
-function recordVitaMint(mint) {
-  stats.vita.lp.mintCount++;
-  stats.vita.lp.added.tokens += mint.vitaAmount;
-  stats.vita.lp.added.counter += mint.counterAmount;
+function recordVitaMint(statsKey, mint) {
+  stats[statsKey].lp.mintCount++;
+  stats[statsKey].lp.added.tokens += mint.vitaAmount;
+  stats[statsKey].lp.added.counter += mint.counterAmount;
 }
 
-function recordVitaBurn(burn) {
-  stats.vita.lp.burnCount++;
-  stats.vita.lp.withdrawn.tokens += burn.vitaAmount;
-  stats.vita.lp.withdrawn.counter += burn.counterAmount;
-}
-
-// --- VITA (Ethereum) ---
-
-function recordEthVitaSwap(swap) {
-  stats.vitaEthereum.swaps.count++;
-  if (swap.direction === 'bought') {
-    stats.vitaEthereum.swaps.bought.tokens += swap.vitaAmount;
-    stats.vitaEthereum.swaps.bought.counter += swap.counterAmount;
-  } else {
-    stats.vitaEthereum.swaps.sold.tokens += swap.vitaAmount;
-    stats.vitaEthereum.swaps.sold.counter += swap.counterAmount;
-  }
-}
-
-function recordEthVitaMint(mint) {
-  stats.vitaEthereum.lp.mintCount++;
-  stats.vitaEthereum.lp.added.tokens += mint.vitaAmount;
-  stats.vitaEthereum.lp.added.counter += mint.counterAmount;
-}
-
-function recordEthVitaBurn(burn) {
-  stats.vitaEthereum.lp.burnCount++;
-  stats.vitaEthereum.lp.withdrawn.tokens += burn.vitaAmount;
-  stats.vitaEthereum.lp.withdrawn.counter += burn.counterAmount;
+function recordVitaBurn(statsKey, burn) {
+  stats[statsKey].lp.burnCount++;
+  stats[statsKey].lp.withdrawn.tokens += burn.vitaAmount;
+  stats[statsKey].lp.withdrawn.counter += burn.counterAmount;
 }
 
 // --- Snapshot ---
@@ -211,7 +186,6 @@ function snapshotAndReset() {
 module.exports = {
   recordAubraiSwap, recordAubraiMint, recordAubraiBurn,
   recordVitaSwap, recordVitaMint, recordVitaBurn,
-  recordEthVitaSwap, recordEthVitaMint, recordEthVitaBurn,
   snapshotAndReset, saveToDisk,
   registerCursorGetter, loadCursorsFromDisk,
 };

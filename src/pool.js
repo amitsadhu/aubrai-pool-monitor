@@ -22,12 +22,33 @@ let aubraiToken;
 let bioToken;
 let aubraiIsToken0;
 
-// VITA CL pools (Base)
-const vitaPools = []; // { contract, vitaIsToken0, address }
+// Per-chain VITA runtime state: { provider, pools: [{contract, vitaIsToken0, address, name}], cursors: {} }
+const vitaChainState = {};
 
-// Ethereum VITA pools (Uniswap v3)
-let ethProvider;
-const ethVitaPools = []; // { contract, vitaIsToken0, address, name }
+async function initVitaChain(chainConfig) {
+  const chainProvider = new ethers.JsonRpcProvider(chainConfig.rpcUrl);
+  const vitaAddress = chainConfig.token.address.toLowerCase();
+  // Set state early so cursors can be restored even on partial init failure
+  vitaChainState[chainConfig.id] = { provider: chainProvider, pools: [], cursors: {} };
+  const state = vitaChainState[chainConfig.id];
+
+  for (const poolCfg of chainConfig.pools) {
+    try {
+      const contract = new ethers.Contract(poolCfg.address, CL_POOL_ABI, chainProvider);
+      const token0 = (await contract.token0()).toLowerCase();
+      const token1 = (await contract.token1()).toLowerCase();
+      if (token0 !== vitaAddress && token1 !== vitaAddress) {
+        console.error(`[init] Skipping ${chainConfig.label} pool ${poolCfg.address} (${poolCfg.name}): VITA not found in pool tokens`);
+        continue;
+      }
+      const vitaIsToken0 = token0 === vitaAddress;
+      state.pools.push({ contract, vitaIsToken0, address: poolCfg.address, name: poolCfg.name });
+      console.log(`[init] ${chainConfig.label} ${poolCfg.name} pool ${poolCfg.address}: VITA is token${vitaIsToken0 ? '0' : '1'}`);
+    } catch (err) {
+      console.warn(`[init] Failed to init ${chainConfig.label} pool ${poolCfg.address} (${poolCfg.name}):`, err.message);
+    }
+  }
+}
 
 async function init() {
   provider = new ethers.JsonRpcProvider(config.rpcUrl);
@@ -40,33 +61,13 @@ async function init() {
   const token0 = (await poolContract.token0()).toLowerCase();
   aubraiIsToken0 = token0 === config.aubrai.address.toLowerCase();
 
-  // Initialize VITA CL pool contracts
-  for (const poolCfg of config.vitaPools) {
-    const contract = new ethers.Contract(poolCfg.address, CL_POOL_ABI, provider);
-    const vitaToken0 = (await contract.token0()).toLowerCase();
-    const vitaIsToken0 = vitaToken0 === config.vita.address.toLowerCase();
-    vitaPools.push({ contract, vitaIsToken0, address: poolCfg.address });
-    console.log(`[init] VITA/BIO CL pool ${poolCfg.address}: VITA is token${vitaIsToken0 ? '0' : '1'}`);
-  }
-
-  // Initialize Ethereum VITA pools
-  try {
-    ethProvider = new ethers.JsonRpcProvider(config.ethereumRpcUrl);
-    const ethVitaAddress = config.vitaEthereum.address.toLowerCase();
-    for (const poolCfg of config.ethereumVitaPools) {
-      const contract = new ethers.Contract(poolCfg.address, CL_POOL_ABI, ethProvider);
-      const token0 = (await contract.token0()).toLowerCase();
-      const token1 = (await contract.token1()).toLowerCase();
-      if (token0 !== ethVitaAddress && token1 !== ethVitaAddress) {
-        console.error(`[init] Skipping Ethereum pool ${poolCfg.address} (${poolCfg.name}): VITA not found in pool tokens`);
-        continue;
-      }
-      const vitaIsToken0 = token0 === ethVitaAddress;
-      ethVitaPools.push({ contract, vitaIsToken0, address: poolCfg.address, name: poolCfg.name });
-      console.log(`[init] Ethereum ${poolCfg.name} pool ${poolCfg.address}: VITA is token${vitaIsToken0 ? '0' : '1'}`);
+  // Initialize all VITA chains
+  for (const chain of config.vitaChains) {
+    try {
+      await initVitaChain(chain);
+    } catch (err) {
+      console.warn(`[init] Failed to initialize ${chain.label} pools:`, err.message);
     }
-  } catch (err) {
-    console.warn('[init] Failed to initialize Ethereum pools:', err.message);
   }
 
   // Load persisted block cursors (so we don't skip events after restart)
@@ -74,8 +75,11 @@ async function init() {
   if (savedCursors) {
     if (savedCursors.lastCheckedBlock) lastCheckedBlock = savedCursors.lastCheckedBlock;
     if (savedCursors.lastCLMintBurnBlock) lastCLMintBurnBlock = savedCursors.lastCLMintBurnBlock;
-    if (savedCursors.vitaPoolCursors) Object.assign(vitaPoolCursors, savedCursors.vitaPoolCursors);
-    if (savedCursors.ethVitaPoolCursors) Object.assign(ethVitaPoolCursors, savedCursors.ethVitaPoolCursors);
+    for (const chain of config.vitaChains) {
+      if (savedCursors[chain.cursorKey]) {
+        Object.assign(vitaChainState[chain.id].cursors, savedCursors[chain.cursorKey]);
+      }
+    }
     console.log(`[init] Restored block cursors — AUBRAI swap: ${lastCheckedBlock}, AUBRAI LP: ${lastCLMintBurnBlock}`);
   }
 
@@ -166,22 +170,23 @@ async function getDexScreenerPrice() {
 }
 
 /**
- * Fetch VITA USD price from DexScreener.
+ * Fetch VITA USD price from DexScreener for a given chain.
  * Checks base/quote ordering to ensure we return VITA's price, not counter token's.
  */
-async function getVitaDexScreenerData() {
+async function getVitaDexScreenerData(chainConfig) {
+  if (!chainConfig.pools?.length) return null;
   try {
-    const res = await fetch(config.vitaPools[0].dexscreenerApiUrl);
+    const res = await fetch(chainConfig.pools[0].dexscreenerApiUrl);
     if (!res.ok) return null;
     const data = await res.json();
     const pair = data.pairs?.[0];
     if (!pair) return null;
     // Verify pair matches our pool
-    if (pair.pairAddress && pair.pairAddress.toLowerCase() !== config.vitaPools[0].address.toLowerCase()) {
-      console.warn(`[dex] DexScreener VITA pair mismatch: expected ${config.vitaPools[0].address}, got ${pair.pairAddress}`);
+    if (pair.pairAddress && pair.pairAddress.toLowerCase() !== chainConfig.pools[0].address.toLowerCase()) {
+      console.warn(`[dex] DexScreener VITA pair mismatch (${chainConfig.label}): expected ${chainConfig.pools[0].address}, got ${pair.pairAddress}`);
       return null;
     }
-    const vitaAddr = config.vita.address.toLowerCase();
+    const vitaAddr = chainConfig.token.address.toLowerCase();
     const basePriceUsd = parseFloat(pair.priceUsd);
     if (!basePriceUsd) return null;
     // If VITA is the base token, priceUsd is VITA's price
@@ -207,8 +212,6 @@ async function getVitaDexScreenerData() {
 let lastKnownPrice = null;
 let lastCheckedBlock = null;        // AUBRAI swap events
 let lastCLMintBurnBlock = null;     // AUBRAI mint/burn events
-const vitaPoolCursors = {};         // per-pool block cursors for Base VITA
-const ethVitaPoolCursors = {};      // per-pool block cursors for Ethereum
 
 function setLastKnownPrice(price) {
   lastKnownPrice = price;
@@ -407,30 +410,31 @@ async function pollCLMintBurnEvents() {
 }
 
 /**
- * Poll for VITA CL Swap/Mint/Burn events across all VITA pools.
+ * Poll for VITA Swap/Mint/Burn events across all pools on a given chain.
  */
-async function pollVitaEvents() {
-  if (vitaPools.length === 0) return { swaps: [], mints: [], burns: [] };
+async function pollVitaChainEvents(chainId) {
+  const state = vitaChainState[chainId];
+  if (!state || state.pools.length === 0) return { swaps: [], mints: [], burns: [] };
 
-  const currentBlock = await provider.getBlockNumber();
+  const currentBlock = await state.provider.getBlockNumber();
 
-  // All VITA pools use the same CL ABI, so topic hashes are the same
-  const swapTopic = vitaPools[0].contract.interface.getEvent('Swap').topicHash;
-  const mintTopic = vitaPools[0].contract.interface.getEvent('Mint').topicHash;
-  const burnTopic = vitaPools[0].contract.interface.getEvent('Burn').topicHash;
+  // All pools use the same CL ABI, so topic hashes are the same
+  const swapTopic = state.pools[0].contract.interface.getEvent('Swap').topicHash;
+  const mintTopic = state.pools[0].contract.interface.getEvent('Mint').topicHash;
+  const burnTopic = state.pools[0].contract.interface.getEvent('Burn').topicHash;
 
   const allSwaps = [];
   const allMints = [];
   const allBurns = [];
 
-  for (const pool of vitaPools) {
+  for (const pool of state.pools) {
     // Per-pool cursor: first call initializes, subsequent calls poll from last success
-    if (!(pool.address in vitaPoolCursors)) {
-      vitaPoolCursors[pool.address] = currentBlock;
+    if (!(pool.address in state.cursors)) {
+      state.cursors[pool.address] = currentBlock;
       continue;
     }
 
-    const lastBlock = vitaPoolCursors[pool.address];
+    const lastBlock = state.cursors[pool.address];
     if (currentBlock <= lastBlock) continue;
 
     let from = lastBlock + 1;
@@ -439,7 +443,7 @@ async function pollVitaEvents() {
     while (from <= currentBlock) {
       const to = Math.min(from + MAX_BLOCK_RANGE - 1, currentBlock);
       try {
-        const logs = await provider.getLogs({
+        const logs = await state.provider.getLogs({
           address: pool.address,
           topics: [[swapTopic, mintTopic, burnTopic]],
           fromBlock: from,
@@ -456,125 +460,29 @@ async function pollVitaEvents() {
         allBurns.push(...chunkBurns);
         lastSuccessBlock = to;
       } catch (err) {
-        console.error(`[vita] getLogs failed for ${pool.address} blocks ${from}-${to}: ${err.message}`);
+        console.error(`[${chainId}-vita] getLogs failed for ${pool.address} blocks ${from}-${to}: ${err.message}`);
         break;
       }
       from = to + 1;
     }
 
-    vitaPoolCursors[pool.address] = lastSuccessBlock;
+    state.cursors[pool.address] = lastSuccessBlock;
   }
   return { swaps: allSwaps, mints: allMints, burns: allBurns };
-}
-
-/**
- * Poll for VITA Swap/Mint/Burn events across all Ethereum VITA pools (Uniswap v3).
- */
-const ETH_MAX_BLOCK_RANGE = 10; // Alchemy free tier: same 10-block limit as Base
-
-async function pollEthVitaEvents() {
-  if (ethVitaPools.length === 0) return { swaps: [], mints: [], burns: [] };
-
-  const currentBlock = await ethProvider.getBlockNumber();
-
-  const swapTopic = ethVitaPools[0].contract.interface.getEvent('Swap').topicHash;
-  const mintTopic = ethVitaPools[0].contract.interface.getEvent('Mint').topicHash;
-  const burnTopic = ethVitaPools[0].contract.interface.getEvent('Burn').topicHash;
-
-  const allSwaps = [];
-  const allMints = [];
-  const allBurns = [];
-
-  for (const pool of ethVitaPools) {
-    // Per-pool cursor: first call initializes, subsequent calls poll from last success
-    if (!(pool.address in ethVitaPoolCursors)) {
-      ethVitaPoolCursors[pool.address] = currentBlock;
-      continue;
-    }
-
-    const lastBlock = ethVitaPoolCursors[pool.address];
-    if (currentBlock <= lastBlock) continue;
-
-    let from = lastBlock + 1;
-    let lastSuccessBlock = lastBlock;
-
-    while (from <= currentBlock) {
-      const to = Math.min(from + ETH_MAX_BLOCK_RANGE - 1, currentBlock);
-      try {
-        const logs = await ethProvider.getLogs({
-          address: pool.address,
-          topics: [[swapTopic, mintTopic, burnTopic]],
-          fromBlock: from,
-          toBlock: to,
-        });
-        const chunkSwaps = [], chunkMints = [], chunkBurns = [];
-        for (const log of logs) {
-          if (log.topics[0] === swapTopic) chunkSwaps.push(parseVitaSwapEvent(log, pool));
-          else if (log.topics[0] === mintTopic) chunkMints.push(parseVitaMintEvent(log, pool));
-          else chunkBurns.push(parseVitaBurnEvent(log, pool));
-        }
-        allSwaps.push(...chunkSwaps);
-        allMints.push(...chunkMints);
-        allBurns.push(...chunkBurns);
-        lastSuccessBlock = to;
-      } catch (err) {
-        console.error(`[eth-vita] getLogs failed for ${pool.address} blocks ${from}-${to}: ${err.message}`);
-        break;
-      }
-      from = to + 1;
-    }
-
-    ethVitaPoolCursors[pool.address] = lastSuccessBlock;
-  }
-
-  return { swaps: allSwaps, mints: allMints, burns: allBurns };
-}
-
-/**
- * Fetch Ethereum VITA USD price from DexScreener.
- */
-async function getEthVitaDexScreenerData() {
-  try {
-    const res = await fetch(config.ethereumVitaPools[0].dexscreenerApiUrl);
-    if (!res.ok) return null;
-    const data = await res.json();
-    const pair = data.pairs?.[0];
-    if (!pair) return null;
-    // Verify pair matches our pool
-    if (pair.pairAddress && pair.pairAddress.toLowerCase() !== config.ethereumVitaPools[0].address.toLowerCase()) {
-      console.warn(`[dex] DexScreener ETH VITA pair mismatch: expected ${config.ethereumVitaPools[0].address}, got ${pair.pairAddress}`);
-      return null;
-    }
-    const vitaAddr = config.vitaEthereum.address.toLowerCase();
-    const basePriceUsd = parseFloat(pair.priceUsd);
-    if (!basePriceUsd) return null;
-    // If VITA is the base token, priceUsd is already VITA's price
-    // If VITA is the quote token, compute: VITA_USD = base_USD / priceNative
-    if (pair.baseToken?.address?.toLowerCase() === vitaAddr) {
-      return { priceUsd: basePriceUsd };
-    }
-    const priceNative = parseFloat(pair.priceNative);
-    if (!priceNative) return null;
-    return { priceUsd: basePriceUsd / priceNative };
-  } catch {
-    return null;
-  }
 }
 
 function getCursors() {
-  return {
-    lastCheckedBlock,
-    lastCLMintBurnBlock,
-    vitaPoolCursors: { ...vitaPoolCursors },
-    ethVitaPoolCursors: { ...ethVitaPoolCursors },
-  };
+  const cursors = { lastCheckedBlock, lastCLMintBurnBlock };
+  for (const chain of config.vitaChains) {
+    cursors[chain.cursorKey] = { ...vitaChainState[chain.id]?.cursors };
+  }
+  return cursors;
 }
 
 module.exports = {
   init, getPoolState, priceFromSqrtX96,
   getDexScreenerPrice, getDexScreenerData, getVitaDexScreenerData,
-  getEthVitaDexScreenerData,
   setLastKnownPrice, pollSwapEvents,
-  pollCLMintBurnEvents, pollVitaEvents, pollEthVitaEvents,
+  pollCLMintBurnEvents, pollVitaChainEvents,
   getCursors,
 };

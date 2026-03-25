@@ -1,9 +1,8 @@
 require('dotenv').config();
 
 const config = {
-  // RPC
+  // RPC (Base — used by AUBRAI pool)
   rpcUrl: process.env.RPC_URL || 'https://mainnet.base.org',
-  ethereumRpcUrl: process.env.ETHEREUM_RPC_URL || 'https://eth.llamarpc.com',
 
   // Telegram
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN,
@@ -26,47 +25,57 @@ const config = {
     decimals: 18,
     symbol: 'BIO',
   },
-  vita: {
-    address: '0x490a4B510d0Ea9f835D2dF29Eb73b4FcA5071937',
-    decimals: 18,
-    symbol: 'VITA',
-  },
-  vitaEthereum: {
-    address: '0x81f8f0bb1cb2a06649e51913a151f0e7ef6fa321',
-    decimals: 18,
-    symbol: 'VITA',
-  },
-
-  // VITA/BIO CL pools on Aerodrome (SlipStream)
-  vitaPools: [
+  // VITA chains — unified config for all VITA pool monitoring
+  vitaChains: [
     {
-      address: '0x5bd27255061a0e8bce2fc32bbb50d3be4e0b28bd',
-      dexscreenerUrl: 'https://dexscreener.com/base/0x5bd27255061a0e8bce2fc32bbb50d3be4e0b28bd',
-      dexscreenerApiUrl: 'https://api.dexscreener.com/latest/dex/pairs/base/0x5bd27255061a0e8bce2fc32bbb50d3be4e0b28bd',
+      id: 'base',
+      label: 'Base',
+      rpcUrl: process.env.RPC_URL || 'https://mainnet.base.org',
+      token: { address: '0x490a4B510d0Ea9f835D2dF29Eb73b4FcA5071937', decimals: 18, symbol: 'VITA' },
+      pools: [
+        {
+          address: '0x5bd27255061a0e8bce2fc32bbb50d3be4e0b28bd',
+          name: 'VITA/BIO #1',
+          dexscreenerApiUrl: 'https://api.dexscreener.com/latest/dex/pairs/base/0x5bd27255061a0e8bce2fc32bbb50d3be4e0b28bd',
+        },
+        {
+          address: '0xa81b95635682295cbd25129199420ae195dcef89',
+          name: 'VITA/BIO #2',
+          dexscreenerApiUrl: 'https://api.dexscreener.com/latest/dex/pairs/base/0xa81b95635682295cbd25129199420ae195dcef89',
+        },
+      ],
+      dex: 'SlipStream CL (2 pools)',
+      statsKey: 'vita',
+      cursorKey: 'vitaPoolCursors',
+      counterLabel: 'BIO',
+      emoji: '\u{1F7E1}',
     },
     {
-      address: '0xa81b95635682295cbd25129199420ae195dcef89',
-      dexscreenerUrl: 'https://dexscreener.com/base/0xa81b95635682295cbd25129199420ae195dcef89',
-      dexscreenerApiUrl: 'https://api.dexscreener.com/latest/dex/pairs/base/0xa81b95635682295cbd25129199420ae195dcef89',
-    },
-  ],
-
-  // Ethereum VITA pools (Uniswap v3)
-  ethereumVitaPools: [
-    {
-      address: '0x2DC8FbaFc10da100F2f12807b93CBb3E5Ff7e6b0',
-      name: 'VITA/BIO',
-      dexscreenerApiUrl: 'https://api.dexscreener.com/latest/dex/pairs/ethereum/0x2DC8FbaFc10da100F2f12807b93CBb3E5Ff7e6b0',
-    },
-    {
-      address: '0xa28b1854a654e35e94d51eA2F4F34208D9BA79A2',
-      name: 'VITARNA/VITA #1',
-      dexscreenerApiUrl: 'https://api.dexscreener.com/latest/dex/pairs/ethereum/0xa28b1854a654e35e94d51eA2F4F34208D9BA79A2',
-    },
-    {
-      address: '0x6aeB5A2974902717ee01d33B6F999eDBc4Ab4C7a',
-      name: 'VITARNA/VITA #2',
-      dexscreenerApiUrl: 'https://api.dexscreener.com/latest/dex/pairs/ethereum/0x6aeB5A2974902717ee01d33B6F999eDBc4Ab4C7a',
+      id: 'ethereum',
+      label: 'Ethereum',
+      rpcUrl: process.env.ETHEREUM_RPC_URL || 'https://eth.llamarpc.com',
+      token: { address: '0x81f8f0bb1cb2a06649e51913a151f0e7ef6fa321', decimals: 18, symbol: 'VITA' },
+      pools: [
+        {
+          address: '0x2DC8FbaFc10da100F2f12807b93CBb3E5Ff7e6b0',
+          name: 'VITA/BIO',
+          dexscreenerApiUrl: 'https://api.dexscreener.com/latest/dex/pairs/ethereum/0x2DC8FbaFc10da100F2f12807b93CBb3E5Ff7e6b0',
+        },
+        {
+          address: '0xa28b1854a654e35e94d51eA2F4F34208D9BA79A2',
+          name: 'VITARNA/VITA #1',
+          dexscreenerApiUrl: 'https://api.dexscreener.com/latest/dex/pairs/ethereum/0xa28b1854a654e35e94d51eA2F4F34208D9BA79A2',
+        },
+        {
+          address: '0x6aeB5A2974902717ee01d33B6F999eDBc4Ab4C7a',
+          name: 'VITARNA/VITA #2',
+          dexscreenerApiUrl: 'https://api.dexscreener.com/latest/dex/pairs/ethereum/0x6aeB5A2974902717ee01d33B6F999eDBc4Ab4C7a',
+        },
+      ],
+      dex: 'Uniswap v3 (3 pools)',
+      statsKey: 'vitaEthereum',
+      cursorKey: 'ethVitaPoolCursors',
+      emoji: '\u{1F7E0}',
     },
   ],
 

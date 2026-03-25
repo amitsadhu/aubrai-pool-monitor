@@ -1,8 +1,8 @@
 const config = require('./config');
-const { init, getPoolState, setLastKnownPrice, pollSwapEvents, pollCLMintBurnEvents, pollVitaEvents, pollEthVitaEvents } = require('./pool');
+const { init, getPoolState, setLastKnownPrice, pollSwapEvents, pollCLMintBurnEvents, pollVitaChainEvents } = require('./pool');
 const { checkAllHealth, checkSwapSlippage } = require('./checks');
 const { sendTelegramAlert, sendSwapAlert, sendAdminAlert, sendAdminDM, sendDailyStatus, sendDailyStats } = require('./alerts');
-const { recordAubraiSwap, recordAubraiMint, recordAubraiBurn, recordVitaSwap, recordVitaMint, recordVitaBurn, recordEthVitaSwap, recordEthVitaMint, recordEthVitaBurn, snapshotAndReset, saveToDisk } = require('./stats');
+const { recordAubraiSwap, recordAubraiMint, recordAubraiBurn, recordVitaSwap, recordVitaMint, recordVitaBurn, snapshotAndReset, saveToDisk } = require('./stats');
 
 function fmt(n, digits = 2) {
   return Number(n).toLocaleString('en-US', { maximumFractionDigits: digits });
@@ -49,42 +49,25 @@ async function poll() {
       console.warn('[cl-lp] CL Mint/Burn polling failed:', err.message);
     }
 
-    // Poll VITA CL events
-    try {
-      const { swaps: vitaSwaps, mints: vitaMints, burns: vitaBurns } = await pollVitaEvents();
-      for (const swap of vitaSwaps) {
-        console.log(`[vita-swap] VITA ${swap.direction} | ${fmt(swap.vitaAmount)} VITA / ${fmt(swap.counterAmount)} BIO | tx: ${swap.txHash}`);
-        recordVitaSwap(swap);
+    // Poll VITA events across all chains
+    for (const chain of config.vitaChains) {
+      try {
+        const { swaps, mints, burns } = await pollVitaChainEvents(chain.id);
+        for (const swap of swaps) {
+          console.log(`[${chain.id}-vita-swap] ${swap.direction} | ${fmt(swap.vitaAmount)} VITA | tx: ${swap.txHash}`);
+          recordVitaSwap(chain.statsKey, swap);
+        }
+        for (const mint of mints) {
+          console.log(`[${chain.id}-vita-lp] Mint | ${fmt(mint.vitaAmount)} VITA | tx: ${mint.txHash}`);
+          recordVitaMint(chain.statsKey, mint);
+        }
+        for (const burn of burns) {
+          console.log(`[${chain.id}-vita-lp] Burn | ${fmt(burn.vitaAmount)} VITA | tx: ${burn.txHash}`);
+          recordVitaBurn(chain.statsKey, burn);
+        }
+      } catch (err) {
+        console.warn(`[${chain.id}-vita] Polling failed:`, err.message);
       }
-      for (const mint of vitaMints) {
-        console.log(`[vita-lp] Mint | ${fmt(mint.vitaAmount)} VITA + ${fmt(mint.counterAmount)} BIO | tx: ${mint.txHash}`);
-        recordVitaMint(mint);
-      }
-      for (const burn of vitaBurns) {
-        console.log(`[vita-lp] Burn | ${fmt(burn.vitaAmount)} VITA + ${fmt(burn.counterAmount)} BIO | tx: ${burn.txHash}`);
-        recordVitaBurn(burn);
-      }
-    } catch (err) {
-      console.warn('[vita] VITA CL polling failed:', err.message);
-    }
-
-    // Poll Ethereum VITA events
-    try {
-      const { swaps: ethVitaSwaps, mints: ethVitaMints, burns: ethVitaBurns } = await pollEthVitaEvents();
-      for (const swap of ethVitaSwaps) {
-        console.log(`[eth-vita-swap] ${swap.direction} | ${fmt(swap.vitaAmount)} VITA | tx: ${swap.txHash}`);
-        recordEthVitaSwap(swap);
-      }
-      for (const mint of ethVitaMints) {
-        console.log(`[eth-vita-lp] Mint | ${fmt(mint.vitaAmount)} VITA | tx: ${mint.txHash}`);
-        recordEthVitaMint(mint);
-      }
-      for (const burn of ethVitaBurns) {
-        console.log(`[eth-vita-lp] Burn | ${fmt(burn.vitaAmount)} VITA | tx: ${burn.txHash}`);
-        recordEthVitaBurn(burn);
-      }
-    } catch (err) {
-      console.warn('[eth-vita] Ethereum VITA polling failed:', err.message);
     }
 
     // Save stats + cursors atomically after all events are recorded
@@ -132,11 +115,10 @@ async function poll() {
 async function start() {
   console.log('AUBRAI/BIO + VITA/BIO Pool Health Monitor');
   console.log(`AUBRAI/BIO CL Pool: ${config.poolAddress}`);
-  for (const p of config.vitaPools) {
-    console.log(`VITA/BIO CL Pool (Base): ${p.address}`);
-  }
-  for (const p of config.ethereumVitaPools) {
-    console.log(`${p.name} Pool (Ethereum): ${p.address}`);
+  for (const chain of config.vitaChains) {
+    for (const p of chain.pools) {
+      console.log(`${p.name} Pool (${chain.label}): ${p.address}`);
+    }
   }
   console.log(`Polling every ${config.pollIntervalMs / 1000}s | Swap slippage threshold: ${config.swapSlippageThreshold}%`);
   console.log(`Telegram alerts: ${config.telegramBotToken && config.telegramChatId ? 'enabled' : 'disabled (missing bot token or chat ID)'}`);
