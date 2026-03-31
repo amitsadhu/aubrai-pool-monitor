@@ -217,7 +217,7 @@ function setLastKnownPrice(price) {
   lastKnownPrice = price;
 }
 
-const MAX_BLOCK_RANGE = 10;
+const MAX_BLOCK_RANGE = 500;
 
 // --- AUBRAI CL event parsers ---
 

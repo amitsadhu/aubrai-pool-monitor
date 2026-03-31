@@ -1,0 +1,13 @@
+{
+  "name": "wallet-balance-monitor",
+  "version": "1.0.0",
+  "description": "USDC wallet balance monitor with Telegram alerts",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "ethers": "^6.13.4"
+  }
+}

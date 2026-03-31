@@ -2,7 +2,7 @@ require('dotenv').config();
 
 const config = {
   // RPC (Base — used by AUBRAI pool)
-  rpcUrl: process.env.RPC_URL || 'https://mainnet.base.org',
+  rpcUrl: process.env.RPC_URL || 'https://rpc.ankr.com/base',
 
   // Telegram
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN,
@@ -30,7 +30,7 @@ const config = {
     {
       id: 'base',
       label: 'Base',
-      rpcUrl: process.env.RPC_URL || 'https://mainnet.base.org',
+      rpcUrl: process.env.RPC_URL || 'https://rpc.ankr.com/base',
       token: { address: '0x490a4B510d0Ea9f835D2dF29Eb73b4FcA5071937', decimals: 18, symbol: 'VITA' },
       pools: [
         {
@@ -53,7 +53,7 @@ const config = {
     {
       id: 'ethereum',
       label: 'Ethereum',
-      rpcUrl: process.env.ETHEREUM_RPC_URL || 'https://eth.llamarpc.com',
+      rpcUrl: process.env.ETHEREUM_RPC_URL || 'https://rpc.ankr.com/eth',
       token: { address: '0x81f8f0bb1cb2a06649e51913a151f0e7ef6fa321', decimals: 18, symbol: 'VITA' },
       pools: [
         {
