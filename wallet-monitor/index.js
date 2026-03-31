@@ -10,6 +10,7 @@ let pollTimer = null;
 let dailyTimer = null;
 let polling = false;
 let dailyReportDue = false;
+let firstPoll = true;
 
 async function poll() {
   if (polling) return;
@@ -26,9 +27,10 @@ async function poll() {
     }
 
     const issues = balances.filter((w) => w.belowThreshold);
-    if (issues.length > 0) {
+    if (issues.length > 0 && !firstPoll) {
       await sendWalletAlert(issues);
     }
+    firstPoll = false;
 
     if (dailyReportDue) {
       dailyReportDue = false;

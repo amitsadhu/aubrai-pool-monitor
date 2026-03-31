@@ -24,7 +24,7 @@ const config = {
   // Thresholds
   alertThreshold: 1000,              // USDC — alert when balance drops below
   pollIntervalMs: 60_000,            // 60 seconds
-  alertCooldownMs: 30 * 60 * 1000,   // 30 minutes between repeated alerts per wallet
+  alertCooldownMs: 12 * 60 * 60 * 1000, // 12 hours between repeated alerts per wallet
 };
 
 module.exports = config;
