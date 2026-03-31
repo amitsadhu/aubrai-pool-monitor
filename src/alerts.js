@@ -211,7 +211,7 @@ async function sendAdminAlert(errorMessage) {
   if (Date.now() - lastAdminAlertTime < config.alertCooldownMs) return;
 
   lastAdminAlertTime = Date.now();
-  await sendAdminDM(`\u{1F527} *Bot Health Error*\n\n${escTg(errorMessage)}`);
+  await sendAdminDM(`\u{1F527} *Pool Monitor Error*\n\n${escTg(errorMessage)}`);
 }
 
 /**

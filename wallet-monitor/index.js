@@ -1,6 +1,6 @@
 const config = require('./config');
 const { initWallets, checkWalletBalances } = require('./wallets');
-const { sendWalletAlert, sendDailyWalletReport, sendAdminAlert } = require('./alerts');
+const { sendWalletAlert, sendDailyWalletReport, sendAdminAlert, sendAdminDM } = require('./alerts');
 
 function fmt(n, digits = 2) {
   return Number(n).toLocaleString('en-US', { maximumFractionDigits: digits });
@@ -90,6 +90,8 @@ async function start() {
   console.log('---');
 
   initWallets();
+
+  await sendAdminDM('\u2705 *Wallet Monitor started*\\. Polling is active\\.');
 
   await poll();
   pollTimer = setInterval(poll, config.pollIntervalMs);

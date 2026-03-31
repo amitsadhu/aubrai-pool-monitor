@@ -145,4 +145,29 @@ async function sendAdminAlert(errorMessage) {
   }
 }
 
-module.exports = { sendWalletAlert, sendDailyWalletReport, sendAdminAlert };
+/**
+ * Send a direct message to admin (no cooldown).
+ */
+async function sendAdminDM(text) {
+  if (!config.telegramBotToken || !config.telegramAdminChatId) return;
+
+  const url = `https://api.telegram.org/bot${config.telegramBotToken}/sendMessage`;
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: config.telegramAdminChatId,
+        text,
+        parse_mode: 'MarkdownV2',
+      }),
+    });
+    if (res.ok) {
+      console.log('[alerts] Admin DM sent');
+    }
+  } catch (err) {
+    console.error('[alerts] Failed to send admin DM:', err.message);
+  }
+}
+
+module.exports = { sendWalletAlert, sendDailyWalletReport, sendAdminAlert, sendAdminDM };

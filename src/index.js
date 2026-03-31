@@ -128,7 +128,7 @@ async function start() {
   await init();
 
   // Notify admin that bot (re)started
-  await sendAdminDM('\u2705 *Bot started*\\. Polling is active\\.');
+  await sendAdminDM('\u2705 *Pool Monitor started*\\. Polling is active\\.');
 
   await poll();
   pollTimer = setInterval(poll, config.pollIntervalMs);
