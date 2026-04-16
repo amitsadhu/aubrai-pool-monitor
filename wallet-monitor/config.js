@@ -3,6 +3,7 @@ require('dotenv').config();
 const config = {
   // RPC (Base)
   rpcUrl: process.env.RPC_URL || 'https://rpc.ankr.com/base',
+  alchemyBaseUrl: process.env.ALCHEMY_BASE_URL || null,
 
   // Telegram
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN,

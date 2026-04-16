@@ -3,6 +3,11 @@ require('dotenv').config();
 const config = {
   // RPC (Base — used by AUBRAI pool)
   rpcUrl: process.env.RPC_URL || 'https://rpc.ankr.com/base',
+  alchemyBaseUrl: process.env.ALCHEMY_BASE_URL || null,
+  alchemyEthUrl: process.env.ALCHEMY_ETH_URL || null,
+
+  // Max block range per provider for getLogs
+  maxBlockRange: { ankr: 500, alchemy: 10 },
 
   // Telegram
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN,
@@ -30,7 +35,9 @@ const config = {
     {
       id: 'base',
       label: 'Base',
+      chainId: 8453,
       rpcUrl: process.env.RPC_URL || 'https://rpc.ankr.com/base',
+      alchemyRpcUrl: process.env.ALCHEMY_BASE_URL || null,
       token: { address: '0x490a4B510d0Ea9f835D2dF29Eb73b4FcA5071937', decimals: 18, symbol: 'VITA' },
       pools: [
         {
@@ -53,7 +60,9 @@ const config = {
     {
       id: 'ethereum',
       label: 'Ethereum',
+      chainId: 1,
       rpcUrl: process.env.ETHEREUM_RPC_URL || 'https://rpc.ankr.com/eth',
+      alchemyRpcUrl: process.env.ALCHEMY_ETH_URL || null,
       token: { address: '0x81f8f0bb1cb2a06649e51913a151f0e7ef6fa321', decimals: 18, symbol: 'VITA' },
       pools: [
         {

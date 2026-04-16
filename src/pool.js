@@ -16,33 +16,118 @@ const ERC20_ABI = [
   'function balanceOf(address) view returns (uint256)',
 ];
 
-let provider;
+// --- RPC failover helpers ---
+
+const PRIMARY_REPROBE_MS = 10 * 60 * 1000; // try primary again every 10 minutes
+
+function isAuthError(err) {
+  const msg = (err?.message || '').toLowerCase();
+  const code = err?.error?.code || err?.code;
+  if (code === 401 || code === 403) return true;
+  if (msg.includes('401') || msg.includes('403')) return true;
+  if (msg.includes('unauthorized') || msg.includes('forbidden')) return true;
+  if (msg.includes('quota')) return true;
+  return false;
+}
+
+function initProviders(primaryUrl, fallbackUrl, label, chainId) {
+  const netOpts = chainId ? { staticNetwork: new ethers.Network('custom', chainId) } : {};
+  const wrapper = {
+    label,
+    primary: new ethers.JsonRpcProvider(primaryUrl, chainId || undefined, netOpts),
+    fallback: fallbackUrl ? new ethers.JsonRpcProvider(fallbackUrl, chainId || undefined, netOpts) : null,
+    active: 'primary',
+    blockRange: config.maxBlockRange.ankr,
+    failoverAt: null, // timestamp when we switched to fallback
+  };
+  if (fallbackUrl) {
+    console.log(`[rpc] ${label}: primary + fallback configured`);
+  } else {
+    console.log(`[rpc] ${label}: primary only (no fallback)`);
+  }
+  return wrapper;
+}
+
+function getProvider(wrapper) {
+  return wrapper.active === 'primary' ? wrapper.primary : wrapper.fallback;
+}
+
+function getBlockRange(wrapper) {
+  return wrapper.blockRange;
+}
+
+function shouldReprobePrimary(wrapper) {
+  return wrapper.active === 'fallback' && wrapper.failoverAt &&
+    Date.now() - wrapper.failoverAt >= PRIMARY_REPROBE_MS;
+}
+
+async function withFailover(wrapper, fn) {
+  // Periodically reprobe primary to auto-recover when credits renew
+  if (shouldReprobePrimary(wrapper)) {
+    try {
+      const result = await fn(wrapper.primary);
+      console.log(`[rpc] ${wrapper.label}: Primary RPC recovered, switching back`);
+      wrapper.active = 'primary';
+      wrapper.blockRange = config.maxBlockRange.ankr;
+      wrapper.failoverAt = null;
+      return result;
+    } catch {
+      // Primary still down — reset timer and continue with fallback
+      wrapper.failoverAt = Date.now();
+    }
+  }
+
+  try {
+    return await fn(getProvider(wrapper));
+  } catch (err) {
+    if (isAuthError(err) && wrapper.fallback && wrapper.active === 'primary') {
+      console.warn(`[rpc] ${wrapper.label}: Primary RPC auth failed, switching to fallback`);
+      wrapper.active = 'fallback';
+      wrapper.blockRange = config.maxBlockRange.alchemy;
+      wrapper.failoverAt = Date.now();
+      return await fn(getProvider(wrapper));
+    }
+    throw err;
+  }
+}
+
+// --- Module state ---
+
+let baseProviders;     // failover wrapper for Base chain
 let poolContract;      // AUBRAI/BIO CL pool
 let aubraiToken;
 let bioToken;
 let aubraiIsToken0;
 
-// Per-chain VITA runtime state: { provider, pools: [{contract, vitaIsToken0, address, name}], cursors: {} }
+// Per-chain VITA runtime state: { providers, pools: [{contract, vitaIsToken0, address, name}], cursors: {} }
 const vitaChainState = {};
 
 async function initVitaChain(chainConfig) {
-  const chainProvider = new ethers.JsonRpcProvider(chainConfig.rpcUrl);
+  const chainProviders = initProviders(chainConfig.rpcUrl, chainConfig.alchemyRpcUrl, `vita-${chainConfig.id}`, chainConfig.chainId);
   const vitaAddress = chainConfig.token.address.toLowerCase();
   // Set state early so cursors can be restored even on partial init failure
-  vitaChainState[chainConfig.id] = { provider: chainProvider, pools: [], cursors: {} };
+  vitaChainState[chainConfig.id] = { providers: chainProviders, pools: [], cursors: {} };
   const state = vitaChainState[chainConfig.id];
 
   for (const poolCfg of chainConfig.pools) {
     try {
-      const contract = new ethers.Contract(poolCfg.address, CL_POOL_ABI, chainProvider);
-      const token0 = (await contract.token0()).toLowerCase();
-      const token1 = (await contract.token1()).toLowerCase();
+      const token0 = await withFailover(chainProviders, async (p) => {
+        const c = new ethers.Contract(poolCfg.address, CL_POOL_ABI, p);
+        return (await c.token0()).toLowerCase();
+      });
+      const token1 = await withFailover(chainProviders, async (p) => {
+        const c = new ethers.Contract(poolCfg.address, CL_POOL_ABI, p);
+        return (await c.token1()).toLowerCase();
+      });
       if (token0 !== vitaAddress && token1 !== vitaAddress) {
         console.error(`[init] Skipping ${chainConfig.label} pool ${poolCfg.address} (${poolCfg.name}): VITA not found in pool tokens`);
         continue;
       }
       const vitaIsToken0 = token0 === vitaAddress;
-      state.pools.push({ contract, vitaIsToken0, address: poolCfg.address, name: poolCfg.name });
+      // Create contract bound to current active provider
+      const activeProvider = getProvider(chainProviders);
+      const activeContract = new ethers.Contract(poolCfg.address, CL_POOL_ABI, activeProvider);
+      state.pools.push({ contract: activeContract, vitaIsToken0, address: poolCfg.address, name: poolCfg.name });
       console.log(`[init] ${chainConfig.label} ${poolCfg.name} pool ${poolCfg.address}: VITA is token${vitaIsToken0 ? '0' : '1'}`);
     } catch (err) {
       console.warn(`[init] Failed to init ${chainConfig.label} pool ${poolCfg.address} (${poolCfg.name}):`, err.message);
@@ -51,15 +136,20 @@ async function initVitaChain(chainConfig) {
 }
 
 async function init() {
-  provider = new ethers.JsonRpcProvider(config.rpcUrl);
-  poolContract = new ethers.Contract(config.poolAddress, CL_POOL_ABI, provider);
+  baseProviders = initProviders(config.rpcUrl, config.alchemyBaseUrl, 'base', 8453);
 
-  aubraiToken = new ethers.Contract(config.aubrai.address, ERC20_ABI, provider);
-  bioToken = new ethers.Contract(config.bio.address, ERC20_ABI, provider);
-
-  // Determine token ordering for AUBRAI CL pool
-  const token0 = (await poolContract.token0()).toLowerCase();
+  // Determine token ordering for AUBRAI CL pool (with failover)
+  const token0 = await withFailover(baseProviders, async (p) => {
+    const c = new ethers.Contract(config.poolAddress, CL_POOL_ABI, p);
+    return (await c.token0()).toLowerCase();
+  });
   aubraiIsToken0 = token0 === config.aubrai.address.toLowerCase();
+
+  // Bind contracts to current active provider
+  const activeProvider = getProvider(baseProviders);
+  poolContract = new ethers.Contract(config.poolAddress, CL_POOL_ABI, activeProvider);
+  aubraiToken = new ethers.Contract(config.aubrai.address, ERC20_ABI, activeProvider);
+  bioToken = new ethers.Contract(config.bio.address, ERC20_ABI, activeProvider);
 
   // Initialize all VITA chains
   for (const chain of config.vitaChains) {
@@ -111,12 +201,17 @@ function priceFromSqrtX96(sqrtPriceX96Raw) {
 async function getPoolState() {
   if (!poolContract) await init();
 
-  const [slot0, liquidity, aubraiBalRaw, bioBalRaw] = await Promise.all([
-    poolContract.slot0(),
-    poolContract.liquidity(),
-    aubraiToken.balanceOf(config.poolAddress),
-    bioToken.balanceOf(config.poolAddress),
-  ]);
+  const [slot0, liquidity, aubraiBalRaw, bioBalRaw] = await withFailover(baseProviders, async (p) => {
+    const pool = new ethers.Contract(config.poolAddress, CL_POOL_ABI, p);
+    const aubrai = new ethers.Contract(config.aubrai.address, ERC20_ABI, p);
+    const bio = new ethers.Contract(config.bio.address, ERC20_ABI, p);
+    return Promise.all([
+      pool.slot0(),
+      pool.liquidity(),
+      aubrai.balanceOf(config.poolAddress),
+      bio.balanceOf(config.poolAddress),
+    ]);
+  });
 
   const sqrtPriceX96 = slot0[0];
   const tick = Number(slot0[1]);
@@ -216,8 +311,6 @@ let lastCLMintBurnBlock = null;     // AUBRAI mint/burn events
 function setLastKnownPrice(price) {
   lastKnownPrice = price;
 }
-
-const MAX_BLOCK_RANGE = 500;
 
 // --- AUBRAI CL event parsers ---
 
@@ -325,7 +418,7 @@ function parseVitaBurnEvent(log, pool) {
 async function pollSwapEvents() {
   if (!poolContract) await init();
 
-  const currentBlock = await provider.getBlockNumber();
+  const currentBlock = await withFailover(baseProviders, (p) => p.getBlockNumber());
 
   if (lastCheckedBlock === null) {
     lastCheckedBlock = currentBlock;
@@ -339,14 +432,14 @@ async function pollSwapEvents() {
   let lastSuccessBlock = lastCheckedBlock;
 
   while (from <= currentBlock) {
-    const to = Math.min(from + MAX_BLOCK_RANGE - 1, currentBlock);
+    const to = Math.min(from + getBlockRange(baseProviders) - 1, currentBlock);
     try {
-      const logs = await provider.getLogs({
+      const logs = await withFailover(baseProviders, (p) => p.getLogs({
         address: config.poolAddress,
         topics: [swapTopicHash],
         fromBlock: from,
         toBlock: to,
-      });
+      }));
       const parsed = logs.map(parseSwapEvent);
       allSwaps.push(...parsed);
       lastSuccessBlock = to;
@@ -364,7 +457,7 @@ async function pollSwapEvents() {
 async function pollCLMintBurnEvents() {
   if (!poolContract) await init();
 
-  const currentBlock = await provider.getBlockNumber();
+  const currentBlock = await withFailover(baseProviders, (p) => p.getBlockNumber());
 
   if (lastCLMintBurnBlock === null) {
     lastCLMintBurnBlock = currentBlock;
@@ -381,14 +474,14 @@ async function pollCLMintBurnEvents() {
   let lastSuccessBlock = lastCLMintBurnBlock;
 
   while (from <= currentBlock) {
-    const to = Math.min(from + MAX_BLOCK_RANGE - 1, currentBlock);
+    const to = Math.min(from + getBlockRange(baseProviders) - 1, currentBlock);
     try {
-      const logs = await provider.getLogs({
+      const logs = await withFailover(baseProviders, (p) => p.getLogs({
         address: config.poolAddress,
         topics: [[mintTopic, burnTopic]],
         fromBlock: from,
         toBlock: to,
-      });
+      }));
       const chunkMints = [];
       const chunkBurns = [];
       for (const log of logs) {
@@ -416,7 +509,7 @@ async function pollVitaChainEvents(chainId) {
   const state = vitaChainState[chainId];
   if (!state || state.pools.length === 0) return { swaps: [], mints: [], burns: [] };
 
-  const currentBlock = await state.provider.getBlockNumber();
+  const currentBlock = await withFailover(state.providers, (p) => p.getBlockNumber());
 
   // All pools use the same CL ABI, so topic hashes are the same
   const swapTopic = state.pools[0].contract.interface.getEvent('Swap').topicHash;
@@ -441,14 +534,14 @@ async function pollVitaChainEvents(chainId) {
     let lastSuccessBlock = lastBlock;
 
     while (from <= currentBlock) {
-      const to = Math.min(from + MAX_BLOCK_RANGE - 1, currentBlock);
+      const to = Math.min(from + getBlockRange(state.providers) - 1, currentBlock);
       try {
-        const logs = await state.provider.getLogs({
+        const logs = await withFailover(state.providers, (p) => p.getLogs({
           address: pool.address,
           topics: [[swapTopic, mintTopic, burnTopic]],
           fromBlock: from,
           toBlock: to,
-        });
+        }));
         const chunkSwaps = [], chunkMints = [], chunkBurns = [];
         for (const log of logs) {
           if (log.topics[0] === swapTopic) chunkSwaps.push(parseVitaSwapEvent(log, pool));
