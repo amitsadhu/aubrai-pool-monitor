@@ -66,9 +66,9 @@ async function sendWalletAlert(issues) {
 }
 
 /**
- * Send daily report with all wallet balances.
+ * Send daily report with all wallet balances + transfer delta stats.
  */
-async function sendDailyWalletReport(balances) {
+async function sendDailyWalletReport(balances, deltaStats) {
   if (!config.telegramBotToken || !config.telegramChatId) return;
 
   const lines = [
@@ -84,6 +84,23 @@ async function sendDailyWalletReport(balances) {
       lines.push(`${status} *${escTg(w.label)}*: ${escTg(fmt(w.balance))} USDC`);
     }
     lines.push(`  \`${escTg(w.address)}\``);
+
+    // Add daily delta stats if available
+    if (deltaStats) {
+      const stats = deltaStats[w.address.toLowerCase()];
+      if (stats && (stats.outCount > 0 || stats.inCount > 0)) {
+        if (stats.outCount > 0) {
+          const txLabel = stats.outCount === 1 ? 'tx' : 'txs';
+          lines.push(`  \u2198 Spent: ${escTg(fmt(stats.outTotal))} USDC \\(${escTg(stats.outCount)} ${escTg(txLabel)}\\)`);
+        }
+        if (stats.inCount > 0) {
+          const txLabel = stats.inCount === 1 ? 'tx' : 'txs';
+          lines.push(`  \u2197 Received: ${escTg(fmt(stats.inTotal))} USDC \\(${escTg(stats.inCount)} ${escTg(txLabel)}\\)`);
+        }
+      } else {
+        lines.push(`  _No activity_`);
+      }
+    }
   }
 
   lines.push('');

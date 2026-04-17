@@ -26,6 +26,9 @@ const config = {
   alertThreshold: 1000,              // USDC — alert when balance drops below
   pollIntervalMs: 60_000,            // 60 seconds
   alertCooldownMs: 12 * 60 * 60 * 1000, // 12 hours between repeated alerts per wallet
+
+  // Block range for getLogs (matches pool monitor pattern)
+  maxBlockRange: { ankr: 500, alchemy: 10 },
 };
 
 module.exports = config;

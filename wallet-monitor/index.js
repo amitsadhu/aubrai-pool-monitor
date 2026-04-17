@@ -1,6 +1,11 @@
+const fs = require('fs');
+const path = require('path');
 const config = require('./config');
-const { initWallets, checkWalletBalances } = require('./wallets');
+const { initWallets, checkWalletBalances, pollTransferEvents, snapshotAndResetStats, getTransferBlockCursor, setTransferBlockCursor, getTransferStats, setTransferStats } = require('./wallets');
 const { sendWalletAlert, sendDailyWalletReport, sendAdminAlert, sendAdminDM } = require('./alerts');
+
+const CURSORS_DIR = '/data';
+const CURSORS_FILE = path.join(CURSORS_DIR, 'wallet-cursors.json');
 
 function fmt(n, digits = 2) {
   return Number(n).toLocaleString('en-US', { maximumFractionDigits: digits });
@@ -11,6 +16,39 @@ let dailyTimer = null;
 let polling = false;
 let dailyReportDue = false;
 let firstPoll = true;
+
+function loadState() {
+  try {
+    if (fs.existsSync(CURSORS_FILE)) {
+      const data = JSON.parse(fs.readFileSync(CURSORS_FILE, 'utf8'));
+      if (data.lastTransferBlock) {
+        setTransferBlockCursor(data.lastTransferBlock);
+        console.log(`[state] Loaded transfer cursor: block ${data.lastTransferBlock}`);
+      }
+      if (data.transferStats) {
+        setTransferStats(data.transferStats);
+        console.log(`[state] Loaded transfer stats from disk`);
+      }
+    }
+  } catch (err) {
+    console.warn('[state] Failed to load state:', err.message);
+  }
+}
+
+function saveState() {
+  try {
+    if (!fs.existsSync(CURSORS_DIR)) return; // volume not mounted (local dev)
+    const cursor = getTransferBlockCursor();
+    if (cursor !== null) {
+      fs.writeFileSync(CURSORS_FILE, JSON.stringify({
+        lastTransferBlock: cursor,
+        transferStats: getTransferStats(),
+      }), 'utf8');
+    }
+  } catch (err) {
+    console.warn('[state] Failed to save state:', err.message);
+  }
+}
 
 async function poll() {
   if (polling) return;
@@ -32,10 +70,16 @@ async function poll() {
     }
     firstPoll = false;
 
+    // Poll USDC transfer events
+    await pollTransferEvents();
+    saveState();
+
     if (dailyReportDue) {
       dailyReportDue = false;
       try {
-        await sendDailyWalletReport(balances);
+        const deltaStats = snapshotAndResetStats();
+        saveState(); // persist zeroed stats so restart doesn't re-report
+        await sendDailyWalletReport(balances, deltaStats);
       } catch (err) {
         console.error('[daily] Failed to send daily report:', err.message);
       }
@@ -92,6 +136,7 @@ async function start() {
   console.log('---');
 
   initWallets();
+  loadState();
 
   await sendAdminDM('\u2705 *Wallet Monitor started*\\. Polling is active\\.');
 
